@@ -679,6 +679,10 @@ def analyze_clusters(df_clustered):
             'Avg_AC_On_Error_Rate': cluster_data['AC_On_Error_Rate'].mean(),
             'Avg_AC_Off_Error_Rate': cluster_data['AC_Off_Error_Rate'].mean(),
 
+            # Operational state error fractions (what % of errors occur in each state)
+            'Avg_FCB_Off_Error_Fraction': cluster_data['FCB_Off_Error_Fraction'].mean(),
+            'Avg_AC_On_Error_Fraction': cluster_data['AC_On_Error_Fraction'].mean(),
+
             # Environmental
             'Avg_High_Humidity_Error_Frac': cluster_data['High_Humidity_Error_Fraction'].mean(),
             'Avg_Rain_Error_Frac': cluster_data['Rain_Error_Fraction'].mean(),
@@ -711,6 +715,12 @@ def analyze_clusters(df_clustered):
         print(f"   Error Rate: {profile['Avg_Error_Rate']:.2%}")
         print(f"   Mean Error: {profile['Avg_Mean_Error']:+.2f}°C")
         print(f"   Std Error: {profile['Avg_Std_Error']:.2f}°C")
+
+        # DEBUG: Show key features for troubleshooting
+        print(f"   [DEBUG] High/Low Err Frac: {profile['Avg_High_Error_Frac']:.2%} / {profile['Avg_Low_Error_Frac']:.2%}")
+        print(f"   [DEBUG] FCB Off Err Frac: {profile['Avg_FCB_Off_Error_Fraction']:.2%}, FCB On Err: {profile['Avg_FCB_On_Error_Rate']:.2%}")
+        print(f"   [DEBUG] AC On Err Frac: {profile['Avg_AC_On_Error_Fraction']:.2%}, AC Off Err: {profile['Avg_AC_Off_Error_Rate']:.2%}")
+        print(f"   [DEBUG] Humidity Err Frac: {profile['Avg_High_Humidity_Error_Frac']:.2%}, Rain Err Frac: {profile['Avg_Rain_Error_Frac']:.2%}")
 
         # Show key discriminating features
         if fault_type == "Surekli_Yuksek":
