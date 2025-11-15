@@ -363,8 +363,8 @@ def find_optimal_clusters(X_scaled, cluster_range=range(5, 15)):
     
     plt.tight_layout()
     plt.savefig('cluster_optimization.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
+    plt.close()  # Close instead of show to avoid blocking
+
     # Recommend optimal
     best_silhouette_idx = np.argmax(metrics['silhouette'])
     best_davies_idx = np.argmin(metrics['davies_bouldin'])
@@ -680,8 +680,8 @@ def visualize_clusters(df_clustered, feature_cols):
     plt.grid(alpha=0.3)
     plt.tight_layout()
     plt.savefig('cluster_visualization_pca.png', dpi=300, bbox_inches='tight')
-    plt.show()
-    
+    plt.close()  # Close instead of show to avoid blocking
+
     print(f"  PC1 explains {pca.explained_variance_ratio_[0]*100:.1f}% of variance")
     print(f"  PC2 explains {pca.explained_variance_ratio_[1]*100:.1f}% of variance")
 
@@ -729,7 +729,7 @@ def visualize_fault_distribution(cluster_profiles):
 
     plt.tight_layout()
     plt.savefig('fault_type_distribution.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    plt.close()  # Close instead of show to avoid blocking
 
     print("✓ Fault distribution chart saved")
 
