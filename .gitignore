@@ -1,6 +1,13 @@
 # Sensitive data files
 *.csv
 clean_joined_dataset.csv
+ml_15day_windows_clustered.csv
+cluster_profiles.csv
+sensor_fault_summary.csv
+
+# Output visualizations
+*.png
+!docs/*.png
 
 # Python
 __pycache__/

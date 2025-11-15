@@ -51,8 +51,9 @@ class Config:
     LAPSE_RATE = -0.65
     
     # Clustering
-    N_CLUSTERS_RANGE = range(5, 15)  # Try 5 to 14 clusters
+    N_CLUSTERS_RANGE = range(7, 13)  # Try 7 to 12 clusters (8-9 optimal for fault types)
     RANDOM_STATE = 42
+    # Note: 8-9 clusters work well for the 8 fault types + normal operation
     
     # Operational states
     FCB_ON_STATES = ["FCBCLSYR", "ACLCLSMMD"]
@@ -421,90 +422,228 @@ def perform_clustering(df_features, n_clusters=None):
 # CLUSTER ANALYSIS & INTERPRETATION
 # ============================================================================
 
+def map_cluster_to_fault_type(profile):
+    """
+    Map cluster characteristics to one of 8 fault types:
+
+    1. Sürekli yüksek okuyor (Consistently reading high)
+    2. Sürekli düşük okuyor (Consistently reading low)
+    3. FCB devrede değilken yüksek okuyor (High when FCB off)
+    4. Klima devredeyken düşük okuyor (Low when AC on)
+    5. Gündüz yüksek okuyor (High during daytime)
+    6. Yüksek nemde hatalı okuyor (Error at high humidity)
+    7. Yağışlı havada hatalı okuyor (Error during rain)
+    8. Düzensiz (rastgele) hatalı okuyor (Irregular/random)
+    9. Normal (No significant errors)
+    """
+
+    # Extract key metrics
+    error_rate = profile['Avg_Error_Rate']
+    mean_error = profile['Avg_Mean_Error']
+    std_error = profile['Avg_Std_Error']
+    high_err_frac = profile['Avg_High_Error_Frac']
+    low_err_frac = profile['Avg_Low_Error_Frac']
+
+    fcb_on_err = profile['Avg_FCB_On_Error_Rate']
+    fcb_off_err = profile['Avg_FCB_Off_Error_Rate']
+    ac_on_err = profile['Avg_AC_On_Error_Rate']
+    ac_off_err = profile['Avg_AC_Off_Error_Rate']
+
+    humidity_err_frac = profile['Avg_High_Humidity_Error_Frac']
+    rain_err_frac = profile['Avg_Rain_Error_Frac']
+    daytime_err_frac = profile['Avg_Daytime_High_Error_Frac']
+    error_variability = profile['Avg_Error_Variability']
+
+    # Decision tree for fault classification
+    fault_scores = {}
+
+    # Type 0: Normal (very low error rate)
+    if error_rate < 0.05:
+        return "Normal", 1.0
+
+    # Type 1: Sürekli yüksek okuyor (Consistently high)
+    if error_rate > 0.70 and high_err_frac > 0.85 and mean_error > 3.0 and std_error < 3.0:
+        fault_scores["Surekli_Yuksek"] = 0.9 + (high_err_frac - 0.85) * 2
+
+    # Type 2: Sürekli düşük okuyor (Consistently low)
+    if error_rate > 0.70 and low_err_frac > 0.85 and mean_error < -3.0 and std_error < 3.0:
+        fault_scores["Surekli_Dusuk"] = 0.9 + (low_err_frac - 0.85) * 2
+
+    # Type 3: FCB devrede değilken yüksek (High when FCB off)
+    if fcb_off_err > 0.40 and fcb_off_err > fcb_on_err * 2.5 and high_err_frac > 0.65:
+        fault_scores["FCB_Off_Yuksek"] = 0.8 + (fcb_off_err / max(fcb_on_err, 0.01)) * 0.05
+
+    # Type 4: Klima devredeyken düşük (Low when AC on)
+    if ac_on_err > 0.40 and ac_on_err > ac_off_err * 2.5 and low_err_frac > 0.65:
+        fault_scores["AC_On_Dusuk"] = 0.8 + (ac_on_err / max(ac_off_err, 0.01)) * 0.05
+
+    # Type 5: Gündüz yüksek (High during daytime - sunlight)
+    if daytime_err_frac > 0.65 and high_err_frac > 0.70 and error_rate > 0.30:
+        fault_scores["Gunduz_Yuksek"] = 0.75 + daytime_err_frac * 0.2
+
+    # Type 6: Yüksek nemde hatalı (Error at high humidity)
+    if humidity_err_frac > 0.65 and error_rate > 0.30:
+        fault_scores["Yuksek_Nem_Hatali"] = 0.75 + humidity_err_frac * 0.2
+
+    # Type 7: Yağışlı havada hatalı (Error during rain)
+    if rain_err_frac > 0.65 and error_rate > 0.30:
+        fault_scores["Yagisli_Hava_Hatali"] = 0.75 + rain_err_frac * 0.2
+
+    # Type 8: Düzensiz/rastgele (Irregular - high variability)
+    if error_variability > 4.0 and std_error > 4.0 and error_rate > 0.25:
+        fault_scores["Duzensiz_Rastgele"] = 0.7 + (error_variability / 10.0) * 0.2
+
+    # Return the fault type with highest score
+    if fault_scores:
+        best_fault = max(fault_scores, key=fault_scores.get)
+        confidence = min(fault_scores[best_fault], 1.0)
+        return best_fault, confidence
+    else:
+        return "Mixed_Unknown", 0.5
+
+def get_fault_description(fault_type):
+    """Get Turkish and English description of fault type"""
+    descriptions = {
+        "Normal": {
+            "tr": "Normal - Hatasız çalışma",
+            "en": "Normal - No significant errors",
+            "icon": "✓"
+        },
+        "Surekli_Yuksek": {
+            "tr": "Sürekli yüksek okuyor - Kalibrasyon/konumlandırma sorunu",
+            "en": "Consistently reading high - Calibration/positioning issue",
+            "icon": "⬆"
+        },
+        "Surekli_Dusuk": {
+            "tr": "Sürekli düşük okuyor - Kalibrasyon/konumlandırma sorunu",
+            "en": "Consistently reading low - Calibration/positioning issue",
+            "icon": "⬇"
+        },
+        "FCB_Off_Yuksek": {
+            "tr": "FCB devrede değilken yüksek - FCB devreye girmiyor",
+            "en": "High when FCB off - FCB not engaging",
+            "icon": "🔧"
+        },
+        "AC_On_Dusuk": {
+            "tr": "Klima devredeyken düşük - FCB erken devreye giriyor",
+            "en": "Low when AC on - FCB engaging too early",
+            "icon": "❄"
+        },
+        "Gunduz_Yuksek": {
+            "tr": "Gündüz yüksek okuyor - Güneş ışığı/gölgeleme sorunu",
+            "en": "High during daytime - Sunlight/shading issue",
+            "icon": "☀"
+        },
+        "Yuksek_Nem_Hatali": {
+            "tr": "Yüksek nemde hatalı - Nem >90% sapma",
+            "en": "Error at high humidity - Humidity >90% deviation",
+            "icon": "💧"
+        },
+        "Yagisli_Hava_Hatali": {
+            "tr": "Yağışlı havada hatalı - Su etkisi",
+            "en": "Error during rain - Water effect",
+            "icon": "🌧"
+        },
+        "Duzensiz_Rastgele": {
+            "tr": "Düzensiz (rastgele) hatalı - Gürültü/kablo/haberleşme",
+            "en": "Irregular/random errors - Noise/cable/communication",
+            "icon": "⚡"
+        },
+        "Mixed_Unknown": {
+            "tr": "Karışık/Belirsiz patern",
+            "en": "Mixed/Unknown pattern",
+            "icon": "❓"
+        }
+    }
+    return descriptions.get(fault_type, descriptions["Mixed_Unknown"])
+
 def analyze_clusters(df_clustered):
     """
-    Analyze and interpret what each cluster represents
+    Analyze and interpret what each cluster represents,
+    mapping to 8 known fault types
     """
     print("\n" + "="*80)
-    print("CLUSTER ANALYSIS & INTERPRETATION")
+    print("CLUSTER ANALYSIS & FAULT TYPE MAPPING")
     print("="*80)
-    
+
     cluster_profiles = []
-    
+
     for cluster_id in sorted(df_clustered['Cluster'].unique()):
         cluster_data = df_clustered[df_clustered['Cluster'] == cluster_id]
-        
+
         profile = {
             'Cluster': cluster_id,
             'Count': len(cluster_data),
             'Percentage': len(cluster_data) / len(df_clustered) * 100,
-            
+
             # Error characteristics
             'Avg_Error_Rate': cluster_data['Error_Rate'].mean(),
             'Avg_Mean_Error': cluster_data['Mean_Signed_Error'].mean(),
             'Avg_Std_Error': cluster_data['Std_Error'].mean(),
-            
+
             # Error direction
             'Avg_High_Error_Frac': cluster_data['High_Error_Fraction'].mean(),
             'Avg_Low_Error_Frac': cluster_data['Low_Error_Fraction'].mean(),
-            
+
             # Operational states
             'Avg_FCB_On_Error_Rate': cluster_data['FCB_On_Error_Rate'].mean(),
             'Avg_FCB_Off_Error_Rate': cluster_data['FCB_Off_Error_Rate'].mean(),
             'Avg_AC_On_Error_Rate': cluster_data['AC_On_Error_Rate'].mean(),
             'Avg_AC_Off_Error_Rate': cluster_data['AC_Off_Error_Rate'].mean(),
-            
+
             # Environmental
             'Avg_High_Humidity_Error_Frac': cluster_data['High_Humidity_Error_Fraction'].mean(),
             'Avg_Rain_Error_Frac': cluster_data['Rain_Error_Fraction'].mean(),
             'Avg_Daytime_High_Error_Frac': cluster_data['Daytime_High_Error_Fraction'].mean(),
-            
+
+            # Variability
+            'Avg_Error_Variability': cluster_data['Error_Variability'].mean(),
+
             # Consistency
             'Avg_Consistency_Score': cluster_data['Consistency_Score'].mean(),
         }
-        
+
+        # Map to fault type
+        fault_type, confidence = map_cluster_to_fault_type(profile)
+        fault_desc = get_fault_description(fault_type)
+
+        profile['Fault_Type'] = fault_type
+        profile['Confidence'] = confidence
+        profile['Fault_Description_TR'] = fault_desc['tr']
+        profile['Fault_Description_EN'] = fault_desc['en']
+
         cluster_profiles.append(profile)
-        
-        # Interpret cluster
-        print(f"\nCluster {cluster_id} ({len(cluster_data):,} windows, {profile['Percentage']:.1f}%):")
-        print(f"  Error Rate: {profile['Avg_Error_Rate']:.2%}")
-        print(f"  Mean Error: {profile['Avg_Mean_Error']:+.2f}°C")
-        
-        # Identify dominant characteristics
-        characteristics = []
-        
-        if profile['Avg_Error_Rate'] < 0.01:
-            characteristics.append("✓ LOW ERROR RATE (Sensor working correctly)")
-        elif profile['Avg_Error_Rate'] > 0.80:
-            characteristics.append("⚠ VERY HIGH ERROR RATE (Continuous malfunction)")
-        
-        if profile['Avg_High_Error_Frac'] > 0.80:
-            characteristics.append("↑ Predominantly HIGH errors")
-        elif profile['Avg_Low_Error_Frac'] > 0.80:
-            characteristics.append("↓ Predominantly LOW errors")
-        
-        if profile['Avg_FCB_Off_Error_Rate'] > profile['Avg_FCB_On_Error_Rate'] * 3:
-            characteristics.append("🔧 Errors when FCB is OFF")
-        
-        if profile['Avg_AC_On_Error_Rate'] > profile['Avg_AC_Off_Error_Rate'] * 3:
-            characteristics.append("❄ Errors when AC is ON")
-        
-        if profile['Avg_High_Humidity_Error_Frac'] > 0.70:
-            characteristics.append("💧 High humidity correlation")
-        
-        if profile['Avg_Rain_Error_Frac'] > 0.70:
-            characteristics.append("🌧 Precipitation correlation")
-        
-        if profile['Avg_Daytime_High_Error_Frac'] > 0.70:
-            characteristics.append("☀ Daytime high errors")
-        
-        if characteristics:
-            print("  Characteristics:")
-            for char in characteristics:
-                print(f"    {char}")
-        else:
-            print("  Characteristics: Mixed/irregular pattern")
-    
+
+        # Print cluster interpretation
+        print(f"\n{fault_desc['icon']} Cluster {cluster_id} → {fault_type}")
+        print(f"   ({len(cluster_data):,} windows, {profile['Percentage']:.1f}%)")
+        print(f"   Confidence: {confidence:.1%}")
+        print(f"   TR: {fault_desc['tr']}")
+        print(f"   EN: {fault_desc['en']}")
+        print(f"   Error Rate: {profile['Avg_Error_Rate']:.2%}")
+        print(f"   Mean Error: {profile['Avg_Mean_Error']:+.2f}°C")
+        print(f"   Std Error: {profile['Avg_Std_Error']:.2f}°C")
+
+        # Show key discriminating features
+        if fault_type == "Surekli_Yuksek":
+            print(f"   → High Error Fraction: {profile['Avg_High_Error_Frac']:.2%}")
+        elif fault_type == "Surekli_Dusuk":
+            print(f"   → Low Error Fraction: {profile['Avg_Low_Error_Frac']:.2%}")
+        elif fault_type == "FCB_Off_Yuksek":
+            print(f"   → FCB Off Error Rate: {profile['Avg_FCB_Off_Error_Rate']:.2%}")
+            print(f"   → FCB On Error Rate: {profile['Avg_FCB_On_Error_Rate']:.2%}")
+        elif fault_type == "AC_On_Dusuk":
+            print(f"   → AC On Error Rate: {profile['Avg_AC_On_Error_Rate']:.2%}")
+            print(f"   → AC Off Error Rate: {profile['Avg_AC_Off_Error_Rate']:.2%}")
+        elif fault_type == "Gunduz_Yuksek":
+            print(f"   → Daytime High Error Fraction: {profile['Avg_Daytime_High_Error_Frac']:.2%}")
+        elif fault_type == "Yuksek_Nem_Hatali":
+            print(f"   → High Humidity Error Fraction: {profile['Avg_High_Humidity_Error_Frac']:.2%}")
+        elif fault_type == "Yagisli_Hava_Hatali":
+            print(f"   → Rain Error Fraction: {profile['Avg_Rain_Error_Frac']:.2%}")
+        elif fault_type == "Duzensiz_Rastgele":
+            print(f"   → Error Variability: {profile['Avg_Error_Variability']:.2f}°C")
+
     return pd.DataFrame(cluster_profiles)
 
 # ============================================================================
@@ -547,42 +686,123 @@ def visualize_clusters(df_clustered, feature_cols):
     print(f"  PC2 explains {pca.explained_variance_ratio_[1]*100:.1f}% of variance")
 
 # ============================================================================
+# FAULT TYPE VISUALIZATION
+# ============================================================================
+
+def visualize_fault_distribution(cluster_profiles):
+    """
+    Visualize distribution of fault types
+    """
+    print("\nCreating fault type distribution chart...")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+    # Count by fault type
+    fault_counts = cluster_profiles.groupby('Fault_Type')['Count'].sum().sort_values(ascending=False)
+
+    # Bar chart
+    colors = ['#2ecc71' if ft == 'Normal' else '#e74c3c' if 'Surekli' in ft else '#f39c12'
+              for ft in fault_counts.index]
+
+    ax1.barh(range(len(fault_counts)), fault_counts.values, color=colors, edgecolor='black', linewidth=1.5)
+    ax1.set_yticks(range(len(fault_counts)))
+    ax1.set_yticklabels(fault_counts.index, fontsize=10)
+    ax1.set_xlabel('Number of Windows', fontweight='bold', fontsize=12)
+    ax1.set_title('Fault Type Distribution (Window Count)', fontweight='bold', fontsize=14)
+    ax1.grid(axis='x', alpha=0.3)
+
+    # Add value labels
+    for i, v in enumerate(fault_counts.values):
+        ax1.text(v + max(fault_counts)*0.01, i, f'{v:,}', va='center', fontweight='bold')
+
+    # Pie chart with percentages
+    percentages = (fault_counts / fault_counts.sum() * 100)
+
+    wedges, texts, autotexts = ax2.pie(fault_counts.values,
+                                        labels=fault_counts.index,
+                                        autopct='%1.1f%%',
+                                        colors=colors,
+                                        startangle=90,
+                                        textprops={'fontsize': 9, 'fontweight': 'bold'})
+
+    ax2.set_title('Fault Type Distribution (Percentage)', fontweight='bold', fontsize=14)
+
+    plt.tight_layout()
+    plt.savefig('fault_type_distribution.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print("✓ Fault distribution chart saved")
+
+    # Print summary
+    print("\n" + "="*80)
+    print("FAULT TYPE SUMMARY")
+    print("="*80)
+    for fault_type, count in fault_counts.items():
+        pct = count / fault_counts.sum() * 100
+        desc = get_fault_description(fault_type)
+        print(f"{desc['icon']} {fault_type:25} {count:6,} windows ({pct:5.1f}%) - {desc['tr']}")
+
+# ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
 def main():
-    """Main pipeline"""
-    
+    """Main pipeline with fault type mapping"""
+
     print("="*80)
-    print("CLUSTERING-BASED FAULT DETECTION")
+    print("CLUSTERING-BASED FAULT DETECTION WITH AUTOMATIC LABELING")
     print("="*80)
-    
+
     # Step 1: Extract features
     print("\nStep 1: Extracting features from raw data...")
     df_raw = pd.read_csv(Config.INPUT_FILE)
     df_features = extract_window_features(df_raw)
-    
+
     # Step 2: Perform clustering
     print("\nStep 2: Performing clustering...")
     df_clustered, kmeans_model, scaler, feature_cols = perform_clustering(df_features)
-    
-    # Step 3: Analyze clusters
-    print("\nStep 3: Analyzing cluster characteristics...")
+
+    # Step 3: Analyze clusters and map to fault types
+    print("\nStep 3: Analyzing clusters and mapping to fault types...")
     cluster_profiles = analyze_clusters(df_clustered)
-    
-    # Step 4: Visualize
-    print("\nStep 4: Creating visualizations...")
+
+    # Step 4: Add fault type labels to windows
+    print("\nStep 4: Adding fault type labels to windows...")
+    cluster_to_fault = dict(zip(cluster_profiles['Cluster'], cluster_profiles['Fault_Type']))
+    cluster_to_confidence = dict(zip(cluster_profiles['Cluster'], cluster_profiles['Confidence']))
+    cluster_to_desc_tr = dict(zip(cluster_profiles['Cluster'], cluster_profiles['Fault_Description_TR']))
+    cluster_to_desc_en = dict(zip(cluster_profiles['Cluster'], cluster_profiles['Fault_Description_EN']))
+
+    df_clustered['Fault_Type'] = df_clustered['Cluster'].map(cluster_to_fault)
+    df_clustered['Fault_Confidence'] = df_clustered['Cluster'].map(cluster_to_confidence)
+    df_clustered['Fault_Description_TR'] = df_clustered['Cluster'].map(cluster_to_desc_tr)
+    df_clustered['Fault_Description_EN'] = df_clustered['Cluster'].map(cluster_to_desc_en)
+
+    # Step 5: Visualize
+    print("\nStep 5: Creating visualizations...")
     visualize_clusters(df_clustered, feature_cols)
-    
-    # Step 5: Save results
-    print("\nStep 5: Saving results...")
+    visualize_fault_distribution(cluster_profiles)
+
+    # Step 6: Save results
+    print("\nStep 6: Saving results...")
     df_clustered.to_csv(Config.OUTPUT_FILE, index=False, encoding='utf-8-sig')
-    cluster_profiles.to_csv('cluster_profiles.csv', index=False)
-    
-    print(f"\n✓ Clustering complete!")
-    print(f"  Output: {Config.OUTPUT_FILE}")
+    cluster_profiles.to_csv('cluster_profiles.csv', index=False, encoding='utf-8-sig')
+
+    # Create a sensor-level summary
+    print("\nStep 7: Creating sensor-level fault summary...")
+    sensor_faults = df_clustered.groupby(['Sensor_Code', 'Fault_Type']).size().reset_index(name='Window_Count')
+    sensor_faults = sensor_faults.sort_values(['Sensor_Code', 'Window_Count'], ascending=[True, False])
+    sensor_faults.to_csv('sensor_fault_summary.csv', index=False, encoding='utf-8-sig')
+
+    print(f"\n{'='*80}")
+    print("✓ CLUSTERING AND LABELING COMPLETE!")
+    print(f"{'='*80}")
+    print(f"  Clustered windows: {Config.OUTPUT_FILE}")
     print(f"  Cluster profiles: cluster_profiles.csv")
-    print(f"\n🎉 Ready for supervised learning using cluster labels!")
+    print(f"  Sensor fault summary: sensor_fault_summary.csv")
+    print(f"  Visualizations: cluster_*.png, fault_type_distribution.png")
+    print(f"\n🎉 Your data is now labeled with fault types!")
+    print(f"   You can use these labels for supervised learning or further analysis.")
 
 if __name__ == "__main__":
     main()
