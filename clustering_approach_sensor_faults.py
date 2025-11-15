@@ -424,18 +424,18 @@ def perform_clustering(df_features, n_clusters=None):
 
 def map_cluster_to_fault_type(profile):
     """
-    Map cluster characteristics to one of 8 fault types using a scoring system.
-    Returns the best matching fault type even with lower confidence.
+    Map cluster characteristics to fault types using domain-specific rules.
 
-    1. Sürekli yüksek okuyor (Consistently reading high)
-    2. Sürekli düşük okuyor (Consistently reading low)
-    3. FCB devrede değilken yüksek okuyor (High when FCB off)
-    4. Klima devredeyken düşük okuyor (Low when AC on)
-    5. Gündüz yüksek okuyor (High during daytime)
-    6. Yüksek nemde hatalı okuyor (Error at high humidity)
-    7. Yağışlı havada hatalı okuyor (Error during rain)
-    8. Düzensiz (rastgele) hatalı okuyor (Irregular/random)
-    9. Normal (No significant errors)
+    Based on expert rules:
+    1. Normal (sensör doğru okuyor): Error rate < 1%
+    2. FCB devrede değilken yüksek: High error 1-80%, >80% errors when FCB off, >80% correct when FCB on
+    3. Klima devrede iken düşük: Low error 1-80%, >80% errors when AC on, >80% correct when AC off
+    4. Sürekli yüksek: Error rate >80%, high errors >90%
+    5. Sürekli düşük: Error rate >80%, low errors >90%
+    6. Gündüz yüksek: High error >1%, >80% of errors are daytime high
+    7. Yüksek nemde hatalı: Error rate >10%, >90% of errors at humidity >90%
+    8. Yağışlı havada hatalı: Error rate >10%, >90% of errors during rain
+    9. Düzensiz: Error rate >1% but doesn't fit above cases
     """
 
     # Extract key metrics
@@ -455,81 +455,110 @@ def map_cluster_to_fault_type(profile):
     daytime_err_frac = profile['Avg_Daytime_High_Error_Frac']
     error_variability = profile['Avg_Error_Variability']
 
-    # Type 0: Normal (very low error rate)
-    if error_rate < 0.10:
-        return "Normal", 0.9
+    # Calculate correct data rates (for FCB/AC conditions)
+    fcb_on_correct = 1.0 - fcb_on_err if fcb_on_err > 0 else 1.0
+    ac_off_correct = 1.0 - ac_off_err if ac_off_err > 0 else 1.0
 
-    # Calculate scores for each fault type (0-1 scale)
+    # RULE 1: Sensör doğru okuyor (Normal)
+    # Error rate < 1%
+    if error_rate < 0.01:
+        return "Normal", 0.95
+
+    # RULE 4: Sürekli yüksek okuyor (Priority - check first)
+    # Error rate > 80% AND high error fraction > 90%
+    if error_rate > 0.80 and high_err_frac > 0.90:
+        confidence = min(0.95, 0.85 + (high_err_frac - 0.90) * 0.5)
+        return "Surekli_Yuksek", confidence
+
+    # RULE 5: Sürekli düşük okuyor (Priority - check first)
+    # Error rate > 80% AND low error fraction > 90%
+    if error_rate > 0.80 and low_err_frac > 0.90:
+        confidence = min(0.95, 0.85 + (low_err_frac - 0.90) * 0.5)
+        return "Surekli_Dusuk", confidence
+
+    # Determine if we should check high or low error cases
+    # High error cases if high errors > 55% of total errors
+    # Low error cases if low errors > 55% of total errors
+    check_high_cases = high_err_frac > 0.55
+    check_low_cases = low_err_frac > 0.55
+
+    # Score-based evaluation for remaining cases
     fault_scores = {}
 
-    # Type 1: Sürekli yüksek okuyor (Consistently high)
-    # Look for: high error rate, mostly high errors, consistent positive bias, low variability
-    if error_rate > 0.40 and high_err_frac > 0.70 and mean_error > 2.0:
-        consistency_score = 1.0 - min(std_error / 5.0, 1.0)  # Lower std = more consistent
-        magnitude_score = min(error_rate, 1.0)
-        direction_score = high_err_frac
-        fault_scores["Surekli_Yuksek"] = (consistency_score * 0.3 + magnitude_score * 0.3 + direction_score * 0.4)
+    if check_high_cases:
+        # RULE 2: FCB devrede değilken yüksek okuyor
+        # Yüksek_Hata_Oranı between 1-80%, >80% of errors when FCB off, <20% error when FCB on
+        yuksek_hata_orani = high_err_frac * error_rate  # Proportion of total that are high errors
+        fcb_off_err_frac = profile.get('Avg_FCB_Off_Error_Fraction', 0)
 
-    # Type 2: Sürekli düşük okuyor (Consistently low)
-    if error_rate > 0.40 and low_err_frac > 0.70 and mean_error < -2.0:
-        consistency_score = 1.0 - min(std_error / 5.0, 1.0)
-        magnitude_score = min(error_rate, 1.0)
-        direction_score = low_err_frac
-        fault_scores["Surekli_Dusuk"] = (consistency_score * 0.3 + magnitude_score * 0.3 + direction_score * 0.4)
+        if 0.01 < yuksek_hata_orani < 0.80:
+            # >80% of errors when FCB off AND <20% error rate when FCB on (>80% correct)
+            if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20:
+                score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
+                fault_scores["FCB_Off_Yuksek"] = score
+            # Relaxed: >70% of errors when FCB off AND <30% error when FCB on
+            elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30:
+                score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
+                fault_scores["FCB_Off_Yuksek"] = score
 
-    # Type 3: FCB devrede değilken yüksek (High when FCB off)
-    # Look for: errors concentrated when FCB is off
-    if fcb_off_err > 0.20 and high_err_frac > 0.55:
-        if fcb_on_err > 0.01:
-            ratio = fcb_off_err / fcb_on_err
-            ratio_score = min(ratio / 5.0, 1.0)  # Normalize ratio to 0-1
-        else:
-            ratio_score = 1.0
-        direction_score = high_err_frac
-        fault_scores["FCB_Off_Yuksek"] = (ratio_score * 0.6 + direction_score * 0.4)
+        # RULE 6: Gündüz yüksek okuyor
+        # Yüksek_Hata_Oranı > 1%, >80% of errors are daytime high readings
+        if yuksek_hata_orani > 0.01 and daytime_err_frac > 0.80:
+            score = 0.85 + (min(daytime_err_frac, 0.95) - 0.80) * 0.3
+            fault_scores["Gunduz_Yuksek"] = score
+        elif yuksek_hata_orani > 0.01 and daytime_err_frac > 0.70:  # Relaxed
+            score = 0.70 + (daytime_err_frac - 0.70) * 0.3
+            fault_scores["Gunduz_Yuksek"] = score
 
-    # Type 4: Klima devredeyken düşük (Low when AC on)
-    if ac_on_err > 0.20 and low_err_frac > 0.55:
-        if ac_off_err > 0.01:
-            ratio = ac_on_err / ac_off_err
-            ratio_score = min(ratio / 5.0, 1.0)
-        else:
-            ratio_score = 1.0
-        direction_score = low_err_frac
-        fault_scores["AC_On_Dusuk"] = (ratio_score * 0.6 + direction_score * 0.4)
+    if check_low_cases:
+        # RULE 3: Klima devrede iken düşük okuyor
+        # Düşük_Hata_Oranı between 1-80%, >80% of errors when AC on, <20% error when AC off
+        dusuk_hata_orani = low_err_frac * error_rate  # Proportion of total that are low errors
+        ac_on_err_frac = profile.get('Avg_AC_On_Error_Fraction', 0)
 
-    # Type 5: Gündüz yüksek (High during daytime - sunlight)
-    if daytime_err_frac > 0.50 and high_err_frac > 0.60 and error_rate > 0.20:
-        temporal_score = daytime_err_frac
-        direction_score = high_err_frac
-        fault_scores["Gunduz_Yuksek"] = (temporal_score * 0.6 + direction_score * 0.4)
+        if 0.01 < dusuk_hata_orani < 0.80:
+            # >80% of errors when AC on AND <20% error rate when AC off (>80% correct)
+            if ac_on_err_frac >= 0.80 and ac_off_err < 0.20:
+                score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
+                fault_scores["AC_On_Dusuk"] = score
+            # Relaxed: >70% of errors when AC on AND <30% error when AC off
+            elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30:
+                score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
+                fault_scores["AC_On_Dusuk"] = score
 
-    # Type 6: Yüksek nemde hatalı (Error at high humidity)
-    if humidity_err_frac > 0.50 and error_rate > 0.20:
-        environmental_score = humidity_err_frac
-        magnitude_score = min(error_rate / 0.8, 1.0)
-        fault_scores["Yuksek_Nem_Hatali"] = (environmental_score * 0.7 + magnitude_score * 0.3)
+    # RULE 7: Yüksek nemde hatalı okuyor
+    # Error rate > 10%, >90% of errors at humidity > 90%
+    if error_rate > 0.10 and humidity_err_frac > 0.90:
+        score = 0.85 + (min(humidity_err_frac, 0.98) - 0.90) * 0.5
+        fault_scores["Yuksek_Nem_Hatali"] = score
+    elif error_rate > 0.10 and humidity_err_frac > 0.80:  # Relaxed
+        score = 0.70 + (humidity_err_frac - 0.80) * 0.5
+        fault_scores["Yuksek_Nem_Hatali"] = score
 
-    # Type 7: Yağışlı havada hatalı (Error during rain)
-    if rain_err_frac > 0.50 and error_rate > 0.20:
-        environmental_score = rain_err_frac
-        magnitude_score = min(error_rate / 0.8, 1.0)
-        fault_scores["Yagisli_Hava_Hatali"] = (environmental_score * 0.7 + magnitude_score * 0.3)
+    # RULE 8: Yağışlı havada hatalı okuyor
+    # Error rate > 10%, >90% of errors during rain
+    if error_rate > 0.10 and rain_err_frac > 0.90:
+        score = 0.85 + (min(rain_err_frac, 0.98) - 0.90) * 0.5
+        fault_scores["Yagisli_Hava_Hatali"] = score
+    elif error_rate > 0.10 and rain_err_frac > 0.80:  # Relaxed
+        score = 0.70 + (rain_err_frac - 0.80) * 0.5
+        fault_scores["Yagisli_Hava_Hatali"] = score
 
-    # Type 8: Düzensiz/rastgele (Irregular - high variability)
-    if error_variability > 3.0 and std_error > 3.0 and error_rate > 0.15:
-        variability_score = min(error_variability / 8.0, 1.0)
-        std_score = min(std_error / 6.0, 1.0)
-        fault_scores["Duzensiz_Rastgele"] = (variability_score * 0.5 + std_score * 0.5)
-
-    # Return the fault type with highest score
+    # Return the best matching fault type
     if fault_scores:
         best_fault = max(fault_scores, key=fault_scores.get)
         confidence = fault_scores[best_fault]
         return best_fault, confidence
-    else:
-        # If no pattern matched, return Mixed_Unknown
-        return "Mixed_Unknown", 0.3
+
+    # RULE 9: Düzensiz (rastgele) hatalı okuyor
+    # Error rate > 1% but doesn't fit any above cases
+    if error_rate > 0.01:
+        # Calculate irregularity score based on variability
+        irregularity_score = 0.5 + min(error_variability / 10.0, 0.3)
+        return "Duzensiz_Rastgele", irregularity_score
+
+    # Fallback for edge cases
+    return "Mixed_Unknown", 0.3
 
 def get_fault_description(fault_type):
     """Get Turkish and English description of fault type"""
