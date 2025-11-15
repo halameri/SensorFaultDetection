@@ -469,6 +469,12 @@ def map_cluster_to_fault_type(profile):
     ac_on_err = profile['Avg_AC_On_Error_Rate']
     ac_off_err = profile['Avg_AC_Off_Error_Rate']
 
+    # Operational state counts (for minimum thresholds - aligned with rule-based code)
+    fcb_on_count = profile.get('Avg_FCB_On_Count', 0)
+    fcb_off_count = profile.get('Avg_FCB_Off_Count', 0)
+    ac_on_count = profile.get('Avg_AC_On_Count', 0)
+    ac_off_count = profile.get('Avg_AC_Off_Count', 0)
+
     humidity_err_frac = profile['Avg_High_Humidity_Error_Frac']
     rain_err_frac = profile['Avg_Rain_Error_Frac']
     gunduz_yuksek_orani_yh = profile['Avg_Gunduz_Yuksek_Orani_YH']  # Of HIGH errors, % daytime
@@ -506,22 +512,23 @@ def map_cluster_to_fault_type(profile):
     fault_scores = {}
 
     if check_high_cases:
-        # RULE 2: FCB devrede değilken yüksek okuyor
+        # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE)
         # Yüksek_Hata_Oranı between 1-80%, >80% of errors when FCB off, <20% error when FCB on
+        # CRITICAL: Only check if fcb_on_count > 20 (rule-based requirement)
         yuksek_hata_orani = high_err_frac * error_rate  # Proportion of total that are high errors
         fcb_off_err_frac = profile.get('Avg_FCB_Off_Error_Fraction', 0)
 
-        if 0.01 < yuksek_hata_orani < 0.80:
+        if 0.01 < yuksek_hata_orani < 0.80 and fcb_on_count > 20:  # MINIMUM COUNT CHECK
             # Strict: >80% of errors when FCB off AND <20% error when FCB on
-            if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20:
+            if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20 and not np.isnan(fcb_on_err):
                 score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
                 fault_scores["FCB_Off_Yuksek"] = score
             # Moderate: >70% of errors when FCB off AND <30% error when FCB on
-            elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30:
+            elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30 and not np.isnan(fcb_on_err):
                 score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
                 fault_scores["FCB_Off_Yuksek"] = score
             # Relaxed: >60% of errors when FCB off AND <40% error when FCB on
-            elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40:
+            elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40 and not np.isnan(fcb_on_err):
                 score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
                 fault_scores["FCB_Off_Yuksek"] = score
 
@@ -539,22 +546,23 @@ def map_cluster_to_fault_type(profile):
                 fault_scores["Gunduz_Yuksek"] = score
 
     if check_low_cases:
-        # RULE 3: Klima devrede iken düşük okuyor
+        # RULE 3: Klima devrede iken düşük okuyor (ALIGNED WITH RULE-BASED CODE)
         # Düşük_Hata_Oranı between 1-80%, >80% of errors when AC on, <20% error when AC off
+        # CRITICAL: Only check if ac_off_count > 20 (rule-based requirement)
         dusuk_hata_orani = low_err_frac * error_rate  # Proportion of total that are low errors
         ac_on_err_frac = profile.get('Avg_AC_On_Error_Fraction', 0)
 
-        if 0.01 < dusuk_hata_orani < 0.80:
+        if 0.01 < dusuk_hata_orani < 0.80 and ac_off_count > 20:  # MINIMUM COUNT CHECK
             # Strict: >80% of errors when AC on AND <20% error when AC off
-            if ac_on_err_frac >= 0.80 and ac_off_err < 0.20:
+            if ac_on_err_frac >= 0.80 and ac_off_err < 0.20 and not np.isnan(ac_off_err):
                 score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
                 fault_scores["AC_On_Dusuk"] = score
             # Moderate: >70% of errors when AC on AND <30% error when AC off
-            elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30:
+            elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30 and not np.isnan(ac_off_err):
                 score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
                 fault_scores["AC_On_Dusuk"] = score
             # Relaxed: >60% of errors when AC on AND <40% error when AC off
-            elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40:
+            elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40 and not np.isnan(ac_off_err):
                 score = 0.60 + (ac_on_err_frac - 0.60) * 0.3
                 fault_scores["AC_On_Dusuk"] = score
 
@@ -694,6 +702,12 @@ def analyze_clusters(df_clustered):
             'Avg_FCB_Off_Error_Fraction': cluster_data['FCB_Off_Error_Fraction'].mean(),
             'Avg_AC_On_Error_Fraction': cluster_data['AC_On_Error_Fraction'].mean(),
 
+            # Operational state counts (for minimum thresholds)
+            'Avg_FCB_On_Count': cluster_data['FCB_On_Count'].mean(),
+            'Avg_FCB_Off_Count': cluster_data['FCB_Off_Count'].mean(),
+            'Avg_AC_On_Count': cluster_data['AC_On_Count'].mean(),
+            'Avg_AC_Off_Count': cluster_data['AC_Off_Count'].mean(),
+
             # Environmental & Temporal
             'Avg_High_Humidity_Error_Frac': cluster_data['High_Humidity_Error_Fraction'].mean(),
             'Avg_Rain_Error_Frac': cluster_data['Rain_Error_Fraction'].mean(),
@@ -730,8 +744,8 @@ def analyze_clusters(df_clustered):
 
         # DEBUG: Show key features for troubleshooting
         print(f"   [DEBUG] High/Low Err Frac: {profile['Avg_High_Error_Frac']:.2%} / {profile['Avg_Low_Error_Frac']:.2%}")
-        print(f"   [DEBUG] FCB Off Err Frac: {profile['Avg_FCB_Off_Error_Fraction']:.2%}, FCB On Err: {profile['Avg_FCB_On_Error_Rate']:.2%}")
-        print(f"   [DEBUG] AC On Err Frac: {profile['Avg_AC_On_Error_Fraction']:.2%}, AC Off Err: {profile['Avg_AC_Off_Error_Rate']:.2%}")
+        print(f"   [DEBUG] FCB: On Count={profile['Avg_FCB_On_Count']:.0f}, Off Err Frac={profile['Avg_FCB_Off_Error_Fraction']:.2%}, On Err={profile['Avg_FCB_On_Error_Rate']:.2%}")
+        print(f"   [DEBUG] AC: Off Count={profile['Avg_AC_Off_Count']:.0f}, On Err Frac={profile['Avg_AC_On_Error_Fraction']:.2%}, Off Err={profile['Avg_AC_Off_Error_Rate']:.2%}")
         print(f"   [DEBUG] Gunduz Yuksek (of HIGH): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
         print(f"   [DEBUG] Humidity Err Frac: {profile['Avg_High_Humidity_Error_Frac']:.2%}, Rain Err Frac: {profile['Avg_Rain_Error_Frac']:.2%}")
 
