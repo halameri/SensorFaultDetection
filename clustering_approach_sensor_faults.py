@@ -95,6 +95,15 @@ def extract_window_features(df):
     df["Actual_Diff"] = df["Sensor_Temperature"] - df["Met_Temperature"]
     df["Signed_Error"] = df["Actual_Diff"] - df["Expected_Diff"]
     df["Abs_Error"] = df["Signed_Error"].abs()
+
+    # DATA QUALITY FILTER: Remove extreme outliers (likely sensor malfunctions)
+    # These are not real faults but data transmission/hardware errors
+    extreme_outlier_mask = (df["Abs_Error"] > 100) | (df["Sensor_Temperature"].abs() > 100)
+    n_extreme = extreme_outlier_mask.sum()
+    if n_extreme > 0:
+        print(f"  ⚠ Filtering {n_extreme:,} extreme outliers (|error| > 100°C or |temp| > 100°C)")
+        df = df[~extreme_outlier_mask].copy()
+
     df["Is_Error"] = (df["Abs_Error"] > Config.ERROR_TOLERANCE).astype(int)
     
     # Temporal features
@@ -492,23 +501,31 @@ def map_cluster_to_fault_type(profile):
         fcb_off_err_frac = profile.get('Avg_FCB_Off_Error_Fraction', 0)
 
         if 0.01 < yuksek_hata_orani < 0.80:
-            # >80% of errors when FCB off AND <20% error rate when FCB on (>80% correct)
+            # Strict: >80% of errors when FCB off AND <20% error when FCB on
             if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20:
                 score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
                 fault_scores["FCB_Off_Yuksek"] = score
-            # Relaxed: >70% of errors when FCB off AND <30% error when FCB on
+            # Moderate: >70% of errors when FCB off AND <30% error when FCB on
             elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30:
                 score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
+                fault_scores["FCB_Off_Yuksek"] = score
+            # Relaxed: >60% of errors when FCB off AND <40% error when FCB on
+            elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40:
+                score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
                 fault_scores["FCB_Off_Yuksek"] = score
 
         # RULE 6: Gündüz yüksek okuyor
         # Yüksek_Hata_Oranı > 1%, >80% of errors are daytime high readings
-        if yuksek_hata_orani > 0.01 and daytime_err_frac > 0.80:
-            score = 0.85 + (min(daytime_err_frac, 0.95) - 0.80) * 0.3
-            fault_scores["Gunduz_Yuksek"] = score
-        elif yuksek_hata_orani > 0.01 and daytime_err_frac > 0.70:  # Relaxed
-            score = 0.70 + (daytime_err_frac - 0.70) * 0.3
-            fault_scores["Gunduz_Yuksek"] = score
+        if yuksek_hata_orani > 0.01:
+            if daytime_err_frac >= 0.80:
+                score = 0.85 + (min(daytime_err_frac, 0.95) - 0.80) * 0.3
+                fault_scores["Gunduz_Yuksek"] = score
+            elif daytime_err_frac >= 0.70:  # Moderate
+                score = 0.70 + (daytime_err_frac - 0.70) * 0.3
+                fault_scores["Gunduz_Yuksek"] = score
+            elif daytime_err_frac >= 0.60:  # Relaxed
+                score = 0.55 + (daytime_err_frac - 0.60) * 0.3
+                fault_scores["Gunduz_Yuksek"] = score
 
     if check_low_cases:
         # RULE 3: Klima devrede iken düşük okuyor
@@ -517,32 +534,44 @@ def map_cluster_to_fault_type(profile):
         ac_on_err_frac = profile.get('Avg_AC_On_Error_Fraction', 0)
 
         if 0.01 < dusuk_hata_orani < 0.80:
-            # >80% of errors when AC on AND <20% error rate when AC off (>80% correct)
+            # Strict: >80% of errors when AC on AND <20% error when AC off
             if ac_on_err_frac >= 0.80 and ac_off_err < 0.20:
                 score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
                 fault_scores["AC_On_Dusuk"] = score
-            # Relaxed: >70% of errors when AC on AND <30% error when AC off
+            # Moderate: >70% of errors when AC on AND <30% error when AC off
             elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30:
                 score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
+                fault_scores["AC_On_Dusuk"] = score
+            # Relaxed: >60% of errors when AC on AND <40% error when AC off
+            elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40:
+                score = 0.60 + (ac_on_err_frac - 0.60) * 0.3
                 fault_scores["AC_On_Dusuk"] = score
 
     # RULE 7: Yüksek nemde hatalı okuyor
     # Error rate > 10%, >90% of errors at humidity > 90%
-    if error_rate > 0.10 and humidity_err_frac > 0.90:
-        score = 0.85 + (min(humidity_err_frac, 0.98) - 0.90) * 0.5
-        fault_scores["Yuksek_Nem_Hatali"] = score
-    elif error_rate > 0.10 and humidity_err_frac > 0.80:  # Relaxed
-        score = 0.70 + (humidity_err_frac - 0.80) * 0.5
-        fault_scores["Yuksek_Nem_Hatali"] = score
+    if error_rate > 0.10:
+        if humidity_err_frac >= 0.90:  # Strict
+            score = 0.85 + (min(humidity_err_frac, 0.98) - 0.90) * 0.5
+            fault_scores["Yuksek_Nem_Hatali"] = score
+        elif humidity_err_frac >= 0.80:  # Moderate
+            score = 0.70 + (humidity_err_frac - 0.80) * 0.5
+            fault_scores["Yuksek_Nem_Hatali"] = score
+        elif humidity_err_frac >= 0.70:  # Relaxed
+            score = 0.55 + (humidity_err_frac - 0.70) * 0.5
+            fault_scores["Yuksek_Nem_Hatali"] = score
 
     # RULE 8: Yağışlı havada hatalı okuyor
     # Error rate > 10%, >90% of errors during rain
-    if error_rate > 0.10 and rain_err_frac > 0.90:
-        score = 0.85 + (min(rain_err_frac, 0.98) - 0.90) * 0.5
-        fault_scores["Yagisli_Hava_Hatali"] = score
-    elif error_rate > 0.10 and rain_err_frac > 0.80:  # Relaxed
-        score = 0.70 + (rain_err_frac - 0.80) * 0.5
-        fault_scores["Yagisli_Hava_Hatali"] = score
+    if error_rate > 0.10:
+        if rain_err_frac >= 0.90:  # Strict
+            score = 0.85 + (min(rain_err_frac, 0.98) - 0.90) * 0.5
+            fault_scores["Yagisli_Hava_Hatali"] = score
+        elif rain_err_frac >= 0.80:  # Moderate
+            score = 0.70 + (rain_err_frac - 0.80) * 0.5
+            fault_scores["Yagisli_Hava_Hatali"] = score
+        elif rain_err_frac >= 0.70:  # Relaxed
+            score = 0.55 + (rain_err_frac - 0.70) * 0.5
+            fault_scores["Yagisli_Hava_Hatali"] = score
 
     # Return the best matching fault type
     if fault_scores:
