@@ -228,12 +228,21 @@ def extract_window_features(df):
             
             sunny_ratio = (win["Weather_Simple"] == "Clear").mean()
             
-            # Temporal
+            # Temporal - ALIGNED WITH RULE-BASED CODE
             daytime_mask = win["Is_Daytime"]
-            if err_count > 0:
-                daytime_high_err_frac = (high_err & daytime_mask).sum() / err_count
+
+            # Gunduz_Yuksek_Orani_YH: Of HIGH errors, what % are during daytime?
+            gunduz_yuksek_count = (high_err & daytime_mask).sum()
+            if high_err_count > 0:
+                gunduz_yuksek_orani_yh = gunduz_yuksek_count / high_err_count
             else:
-                daytime_high_err_frac = 0.0
+                gunduz_yuksek_orani_yh = 0.0
+
+            # Also keep the general daytime error fraction for other uses
+            if err_count > 0:
+                daytime_err_frac = (err_mask & daytime_mask).sum() / err_count
+            else:
+                daytime_err_frac = 0.0
             
             # Variability metrics (NEW - useful for clustering)
             error_variability = win["Abs_Error"].std()
@@ -302,8 +311,9 @@ def extract_window_features(df):
                 "Rain_Error_Fraction": rain_err_frac,
                 "Sunny_Ratio": sunny_ratio,
                 
-                # Temporal
-                "Daytime_High_Error_Fraction": daytime_high_err_frac,
+                # Temporal (ALIGNED WITH RULE-BASED CODE)
+                "Gunduz_Yuksek_Orani_YH": gunduz_yuksek_orani_yh,  # Of HIGH errors, % during daytime
+                "Daytime_Error_Fraction": daytime_err_frac,  # Of ALL errors, % during daytime
                 
                 # Variability metrics (NEW)
                 "Error_Variability": error_variability,
@@ -461,7 +471,8 @@ def map_cluster_to_fault_type(profile):
 
     humidity_err_frac = profile['Avg_High_Humidity_Error_Frac']
     rain_err_frac = profile['Avg_Rain_Error_Frac']
-    daytime_err_frac = profile['Avg_Daytime_High_Error_Frac']
+    gunduz_yuksek_orani_yh = profile['Avg_Gunduz_Yuksek_Orani_YH']  # Of HIGH errors, % daytime
+    daytime_err_frac = profile['Avg_Daytime_Error_Frac']
     error_variability = profile['Avg_Error_Variability']
 
     # Calculate correct data rates (for FCB/AC conditions)
@@ -514,17 +525,17 @@ def map_cluster_to_fault_type(profile):
                 score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
                 fault_scores["FCB_Off_Yuksek"] = score
 
-        # RULE 6: Gündüz yüksek okuyor
-        # Yüksek_Hata_Oranı > 1%, >80% of errors are daytime high readings
+        # RULE 6: Gündüz yüksek okuyor (ALIGNED WITH RULE-BASED CODE)
+        # Yüksek_Hata_Oranı > 1%, >80% of HIGH errors occur during daytime
         if yuksek_hata_orani > 0.01:
-            if daytime_err_frac >= 0.80:
-                score = 0.85 + (min(daytime_err_frac, 0.95) - 0.80) * 0.3
+            if gunduz_yuksek_orani_yh >= 0.80:  # Of HIGH errors, 80%+ are daytime
+                score = 0.85 + (min(gunduz_yuksek_orani_yh, 0.95) - 0.80) * 0.3
                 fault_scores["Gunduz_Yuksek"] = score
-            elif daytime_err_frac >= 0.70:  # Moderate
-                score = 0.70 + (daytime_err_frac - 0.70) * 0.3
+            elif gunduz_yuksek_orani_yh >= 0.70:  # Moderate
+                score = 0.70 + (gunduz_yuksek_orani_yh - 0.70) * 0.3
                 fault_scores["Gunduz_Yuksek"] = score
-            elif daytime_err_frac >= 0.60:  # Relaxed
-                score = 0.55 + (daytime_err_frac - 0.60) * 0.3
+            elif gunduz_yuksek_orani_yh >= 0.60:  # Relaxed
+                score = 0.55 + (gunduz_yuksek_orani_yh - 0.60) * 0.3
                 fault_scores["Gunduz_Yuksek"] = score
 
     if check_low_cases:
@@ -683,10 +694,11 @@ def analyze_clusters(df_clustered):
             'Avg_FCB_Off_Error_Fraction': cluster_data['FCB_Off_Error_Fraction'].mean(),
             'Avg_AC_On_Error_Fraction': cluster_data['AC_On_Error_Fraction'].mean(),
 
-            # Environmental
+            # Environmental & Temporal
             'Avg_High_Humidity_Error_Frac': cluster_data['High_Humidity_Error_Fraction'].mean(),
             'Avg_Rain_Error_Frac': cluster_data['Rain_Error_Fraction'].mean(),
-            'Avg_Daytime_High_Error_Frac': cluster_data['Daytime_High_Error_Fraction'].mean(),
+            'Avg_Gunduz_Yuksek_Orani_YH': cluster_data['Gunduz_Yuksek_Orani_YH'].mean(),  # NEW: Matches rule-based code
+            'Avg_Daytime_Error_Frac': cluster_data['Daytime_Error_Fraction'].mean(),
 
             # Variability
             'Avg_Error_Variability': cluster_data['Error_Variability'].mean(),
@@ -720,6 +732,7 @@ def analyze_clusters(df_clustered):
         print(f"   [DEBUG] High/Low Err Frac: {profile['Avg_High_Error_Frac']:.2%} / {profile['Avg_Low_Error_Frac']:.2%}")
         print(f"   [DEBUG] FCB Off Err Frac: {profile['Avg_FCB_Off_Error_Fraction']:.2%}, FCB On Err: {profile['Avg_FCB_On_Error_Rate']:.2%}")
         print(f"   [DEBUG] AC On Err Frac: {profile['Avg_AC_On_Error_Fraction']:.2%}, AC Off Err: {profile['Avg_AC_Off_Error_Rate']:.2%}")
+        print(f"   [DEBUG] Gunduz Yuksek (of HIGH): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
         print(f"   [DEBUG] Humidity Err Frac: {profile['Avg_High_Humidity_Error_Frac']:.2%}, Rain Err Frac: {profile['Avg_Rain_Error_Frac']:.2%}")
 
         # Show key discriminating features
@@ -734,7 +747,7 @@ def analyze_clusters(df_clustered):
             print(f"   → AC On Error Rate: {profile['Avg_AC_On_Error_Rate']:.2%}")
             print(f"   → AC Off Error Rate: {profile['Avg_AC_Off_Error_Rate']:.2%}")
         elif fault_type == "Gunduz_Yuksek":
-            print(f"   → Daytime High Error Fraction: {profile['Avg_Daytime_High_Error_Frac']:.2%}")
+            print(f"   → Gunduz Yuksek Orani (of HIGH errors): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
         elif fault_type == "Yuksek_Nem_Hatali":
             print(f"   → High Humidity Error Fraction: {profile['Avg_High_Humidity_Error_Frac']:.2%}")
         elif fault_type == "Yagisli_Hava_Hatali":
