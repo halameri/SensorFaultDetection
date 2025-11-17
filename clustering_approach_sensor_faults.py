@@ -37,7 +37,7 @@ class Config:
     """Configuration parameters"""
     
     # Files
-    INPUT_FILE = "clean_joined_dataset.csv"
+    INPUT_FILE = r"D:\TT\YZ2025\FCBOX\FinalCodes\Finalcodes28102025\FCboxSensorHataTespiti\ML2\claude\files\clean_joined_dataset - Copy.csv"
     OUTPUT_FILE = "ml_15day_windows_clustered.csv"
     
     # Window parameters
