@@ -210,7 +210,92 @@ def extract_window_features(df):
             else:
                 ac_on_err_frac = 0.0
                 ac_off_err_frac = 0.0
-            
+
+            # ================================================================
+            # STATE REVERSAL ANALYSIS - Critical for distinguishing causation
+            # ================================================================
+            # User's insight: If sensor ALWAYS reads low (AC on AND off) → Surekli_Dusuk
+            #                 If sensor reads low ONLY when AC on → AC_On_Dusuk
+            # Need to check: Does pattern REVERSE when state changes?
+
+            # 1. CORRECT READING RATES (not just error rates)
+            # For true "Normal" sensor: Most readings should be CORRECT
+            correct_mask = ~err_mask  # Readings within tolerance
+
+            fcb_on_correct_rate = (correct_mask & fcb_on_mask).sum() / n_fcb_on if n_fcb_on > 0 else 0
+            fcb_off_correct_rate = (correct_mask & fcb_off_mask).sum() / n_fcb_off if n_fcb_off > 0 else 0
+
+            ac_on_correct_rate = (correct_mask & ac_on_mask).sum() / n_ac_on if n_ac_on > 0 else 0
+            ac_off_correct_rate = (correct_mask & ac_off_mask).sum() / n_ac_off if n_ac_off > 0 else 0
+
+            # 2. ERROR DIRECTION IN EACH STATE
+            # Check if errors are consistently HIGH or LOW in each state
+
+            # FCB states - direction of errors
+            fcb_on_high_err = (high_err & fcb_on_mask).sum()
+            fcb_on_low_err = (low_err & fcb_on_mask).sum()
+            fcb_off_high_err = (high_err & fcb_off_mask).sum()
+            fcb_off_low_err = (low_err & fcb_off_mask).sum()
+
+            # Of errors when FCB on, what % are HIGH vs LOW?
+            fcb_on_err_count = fcb_on_high_err + fcb_on_low_err
+            if fcb_on_err_count > 0:
+                fcb_on_high_err_frac = fcb_on_high_err / fcb_on_err_count
+                fcb_on_low_err_frac = fcb_on_low_err / fcb_on_err_count
+            else:
+                fcb_on_high_err_frac = 0.0
+                fcb_on_low_err_frac = 0.0
+
+            fcb_off_err_count = fcb_off_high_err + fcb_off_low_err
+            if fcb_off_err_count > 0:
+                fcb_off_high_err_frac = fcb_off_high_err / fcb_off_err_count
+                fcb_off_low_err_frac = fcb_off_low_err / fcb_off_err_count
+            else:
+                fcb_off_high_err_frac = 0.0
+                fcb_off_low_err_frac = 0.0
+
+            # AC states - direction of errors
+            ac_on_high_err = (high_err & ac_on_mask).sum()
+            ac_on_low_err = (low_err & ac_on_mask).sum()
+            ac_off_high_err = (high_err & ac_off_mask).sum()
+            ac_off_low_err = (low_err & ac_off_mask).sum()
+
+            ac_on_err_count = ac_on_high_err + ac_on_low_err
+            if ac_on_err_count > 0:
+                ac_on_high_err_frac = ac_on_high_err / ac_on_err_count
+                ac_on_low_err_frac = ac_on_low_err / ac_on_err_count
+            else:
+                ac_on_high_err_frac = 0.0
+                ac_on_low_err_frac = 0.0
+
+            ac_off_err_count = ac_off_high_err + ac_off_low_err
+            if ac_off_err_count > 0:
+                ac_off_high_err_frac = ac_off_high_err / ac_off_err_count
+                ac_off_low_err_frac = ac_off_low_err / ac_off_err_count
+            else:
+                ac_off_high_err_frac = 0.0
+                ac_off_low_err_frac = 0.0
+
+            # 3. STATE REVERSAL INDICATORS
+            # Does error pattern REVERSE when state changes?
+
+            # FCB reversal: If truly FCB-related, should have:
+            # - High errors when FCB OFF + Correct readings when FCB ON
+            # If errors persist regardless of FCB state → Not FCB-related
+            fcb_contrast_score = fcb_on_correct_rate - fcb_off_err_rate  # Higher = clear contrast
+
+            # AC reversal: If truly AC-related, should have:
+            # - Low errors when AC ON + Correct/High readings when AC OFF
+            # Direction reversal: errors are LOW when AC on, but CORRECT/HIGH when AC off
+            ac_contrast_score = ac_off_correct_rate - ac_on_err_rate  # Higher = clear contrast
+
+            # Direction consistency check
+            # For AC_On_Dusuk: Should be LOW when AC on, NOT low when AC off
+            ac_direction_reversal = (ac_on_low_err_frac > 0.70) and (ac_off_low_err_frac < 0.30)
+
+            # For FCB_Off_Yuksek: Should be HIGH when FCB off, NOT high when FCB on
+            fcb_direction_reversal = (fcb_off_high_err_frac > 0.70) and (fcb_on_high_err_frac < 0.30)
+
             # Environmental
             mean_humidity = win["Met_NEM"].mean()
             high_humidity_ratio = (win["Met_NEM"] > 90).mean()
@@ -243,19 +328,188 @@ def extract_window_features(df):
                 daytime_err_frac = (err_mask & daytime_mask).sum() / err_count
             else:
                 daytime_err_frac = 0.0
-            
+
+            # ================================================================
+            # TIME-SPECIFIC ERROR ANALYSIS (NEW - Critical for user's scenario)
+            # ================================================================
+            # User's insight: Need to check WHEN errors occur and WHAT DIRECTION
+            # Example: Errors at NIGHT (high) vs DAYTIME (low) - NOT "Gunduz_Yuksek"!
+
+            nighttime_mask = ~daytime_mask  # Nighttime = 18:00 - 06:00
+
+            # 1. ERROR RATES BY TIME OF DAY
+            n_daytime = daytime_mask.sum()
+            n_nighttime = nighttime_mask.sum()
+
+            # How many readings have errors during day vs night?
+            day_err_count = (err_mask & daytime_mask).sum()
+            night_err_count = (err_mask & nighttime_mask).sum()
+
+            # Error rate during day vs night
+            day_err_rate = day_err_count / n_daytime if n_daytime > 0 else 0
+            night_err_rate = night_err_count / n_nighttime if n_nighttime > 0 else 0
+
+            # Of ALL errors, what % occur during night vs day?
+            if err_count > 0:
+                night_err_fraction = night_err_count / err_count  # Key metric!
+                # If > 0.60, most errors are at NIGHT, NOT day
+            else:
+                night_err_fraction = 0.0
+
+            # 2. ERROR DIRECTION BY TIME OF DAY
+            # Day: HIGH or LOW?
+            day_high_err_count = (high_err & daytime_mask).sum()
+            day_low_err_count = (low_err & daytime_mask).sum()
+
+            if day_err_count > 0:
+                day_high_err_frac = day_high_err_count / day_err_count
+                day_low_err_frac = day_low_err_count / day_err_count
+            else:
+                day_high_err_frac = 0.0
+                day_low_err_frac = 0.0
+
+            # Night: HIGH or LOW?
+            night_high_err_count = (high_err & nighttime_mask).sum()
+            night_low_err_count = (low_err & nighttime_mask).sum()
+
+            if night_err_count > 0:
+                night_high_err_frac = night_high_err_count / night_err_count
+                night_low_err_frac = night_low_err_count / night_err_count
+            else:
+                night_high_err_frac = 0.0
+                night_low_err_frac = 0.0
+
+            # 3. DOMINANT ERROR TIME (Key for user's scenario)
+            # Where do MOST errors occur?
+            if err_count > 5:  # Need enough errors to determine pattern
+                if night_err_fraction > 0.65:
+                    dominant_error_time = 2  # Night-dominant
+                elif night_err_fraction < 0.35:
+                    dominant_error_time = 1  # Day-dominant
+                else:
+                    dominant_error_time = 0  # Mixed/balanced
+            else:
+                dominant_error_time = 0
+
+            # 4. TIME-DIRECTION PATTERN CHECK
+            # Check for user's scenario: High at night, low/correct at day
+            night_high_day_low_pattern = (
+                (night_err_fraction > 0.60) and  # Most errors at night
+                (night_high_err_frac > 0.70) and  # Night errors are HIGH
+                (day_low_err_frac > 0.50 or day_err_rate < night_err_rate * 0.5)  # Day is LOW or much better
+            )
+
+            # Opposite pattern: High during day, low/correct at night
+            day_high_night_low_pattern = (
+                (night_err_fraction < 0.40) and  # Most errors during day
+                (day_high_err_frac > 0.70) and  # Day errors are HIGH
+                (night_err_rate < day_err_rate * 0.5)  # Night is much better
+            )
+
             # Variability metrics (NEW - useful for clustering)
             error_variability = win["Abs_Error"].std()
             error_range = win["Abs_Error"].max() - win["Abs_Error"].min()
             error_skewness = win["Signed_Error"].skew() if len(win) > 2 else 0
-            
+
             # Consistency metrics (NEW)
             consistency_score = 1 - error_rate  # Higher = more consistent
-            
+
             # State transition metrics (NEW)
             fcb_state_changes = (win["FCB_On"] != win["FCB_On"].shift()).sum()
             ac_state_changes = (win["AC_On"] != win["AC_On"].shift()).sum()
-            
+
+            # ================================================================
+            # ADVANCED FEATURES - Confounding Variable Analysis
+            # ================================================================
+            # These features help distinguish TRUE causation from correlation
+            # Example: Is FCB the cause, or is it just coincidentally off during daytime?
+
+            # 1. HOURLY ERROR CONCENTRATION
+            # If errors concentrate in specific hours (11am-2pm) → likely solar/daytime issue
+            # If errors spread across all hours when FCB off → likely FCB issue
+            if err_count > 0:
+                error_hours = win.loc[err_mask, "Hour"].values
+                if len(error_hours) > 0:
+                    # Peak error hour (mode)
+                    from scipy import stats as scipy_stats
+                    peak_error_hour = scipy_stats.mode(error_hours, keepdims=True)[0][0] if len(error_hours) > 1 else error_hours[0]
+
+                    # Error hour spread (std of error hours)
+                    error_hour_std = np.std(error_hours)
+
+                    # Concentration: % of errors in peak 3-hour window
+                    hour_counts = pd.Series(error_hours).value_counts()
+                    if len(hour_counts) > 0:
+                        # Find best 3-hour consecutive window
+                        max_3hr_count = 0
+                        for h in range(24):
+                            count_3hr = hour_counts.get(h, 0) + hour_counts.get((h+1)%24, 0) + hour_counts.get((h+2)%24, 0)
+                            max_3hr_count = max(max_3hr_count, count_3hr)
+                        error_3hr_concentration = max_3hr_count / len(error_hours)
+                    else:
+                        error_3hr_concentration = 0.0
+                else:
+                    peak_error_hour = 12  # Default to noon
+                    error_hour_std = 0.0
+                    error_3hr_concentration = 0.0
+            else:
+                peak_error_hour = 12
+                error_hour_std = 0.0
+                error_3hr_concentration = 0.0
+
+            # 2. CONDITIONAL ERROR RATES - Separate confounded variables
+            # Key insight: Check if pattern persists when controlling for other variables
+
+            # FCB_Off during DAY vs NIGHT (to separate FCB effect from daytime effect)
+            fcb_off_day_mask = fcb_off_mask & daytime_mask
+            fcb_off_night_mask = fcb_off_mask & ~daytime_mask
+
+            n_fcb_off_day = fcb_off_day_mask.sum()
+            n_fcb_off_night = fcb_off_night_mask.sum()
+
+            fcb_off_day_err_rate = (err_mask & fcb_off_day_mask).sum() / n_fcb_off_day if n_fcb_off_day > 0 else 0
+            fcb_off_night_err_rate = (err_mask & fcb_off_night_mask).sum() / n_fcb_off_night if n_fcb_off_night > 0 else 0
+
+            # If FCB_Off_Day error >> FCB_Off_Night error → It's daytime (sun), not FCB!
+            # If FCB_Off_Day ≈ FCB_Off_Night (both high) → It's FCB issue
+            if fcb_off_night_err_rate > 0:
+                fcb_day_night_ratio = fcb_off_day_err_rate / fcb_off_night_err_rate
+            else:
+                fcb_day_night_ratio = 1.0 if fcb_off_day_err_rate == 0 else 999.0  # Very high if only day errors
+
+            # FCB_On during DAY vs NIGHT
+            fcb_on_day_mask = fcb_on_mask & daytime_mask
+            fcb_on_night_mask = fcb_on_mask & ~daytime_mask
+
+            n_fcb_on_day = fcb_on_day_mask.sum()
+            n_fcb_on_night = fcb_on_night_mask.sum()
+
+            fcb_on_day_err_rate = (err_mask & fcb_on_day_mask).sum() / n_fcb_on_day if n_fcb_on_day > 0 else 0
+            fcb_on_night_err_rate = (err_mask & fcb_on_night_mask).sum() / n_fcb_on_night if n_fcb_on_night > 0 else 0
+
+            # AC_On during DAY vs NIGHT (same logic for AC confounding)
+            ac_on_day_mask = ac_on_mask & daytime_mask
+            ac_on_night_mask = ac_on_mask & ~daytime_mask
+
+            n_ac_on_day = ac_on_day_mask.sum()
+            n_ac_on_night = ac_on_night_mask.sum()
+
+            ac_on_day_err_rate = (err_mask & ac_on_day_mask).sum() / n_ac_on_day if n_ac_on_day > 0 else 0
+            ac_on_night_err_rate = (err_mask & ac_on_night_mask).sum() / n_ac_on_night if n_ac_on_night > 0 else 0
+
+            # 3. MIDDAY CONCENTRATION (11am-2pm) - Solar radiation peak
+            midday_mask = (win["Hour"] >= 11) & (win["Hour"] < 14)
+            if err_count > 0:
+                midday_err_frac = (err_mask & midday_mask).sum() / err_count
+            else:
+                midday_err_frac = 0.0
+
+            # Of HIGH errors, how many are in midday?
+            if high_err_count > 0:
+                midday_high_err_frac = (high_err & midday_mask).sum() / high_err_count
+            else:
+                midday_high_err_frac = 0.0
+
             # ================================================================
             # STORE WINDOW FEATURES
             # ================================================================
@@ -314,16 +568,72 @@ def extract_window_features(df):
                 # Temporal (ALIGNED WITH RULE-BASED CODE)
                 "Gunduz_Yuksek_Orani_YH": gunduz_yuksek_orani_yh,  # Of HIGH errors, % during daytime
                 "Daytime_Error_Fraction": daytime_err_frac,  # Of ALL errors, % during daytime
-                
+
                 # Variability metrics (NEW)
                 "Error_Variability": error_variability,
                 "Error_Range": error_range,
                 "Error_Skewness": error_skewness,
                 "Consistency_Score": consistency_score,
-                
+
                 # State transitions (NEW)
                 "FCB_State_Changes": fcb_state_changes,
                 "AC_State_Changes": ac_state_changes,
+
+                # ADVANCED - Confounding analysis (NEW)
+                "Peak_Error_Hour": peak_error_hour,
+                "Error_Hour_Std": error_hour_std,
+                "Error_3Hr_Concentration": error_3hr_concentration,
+                "Midday_Error_Fraction": midday_err_frac,
+                "Midday_High_Error_Fraction": midday_high_err_frac,
+
+                # State reversal analysis - CRITICAL for causation (NEW)
+                "FCB_On_Correct_Rate": fcb_on_correct_rate,
+                "FCB_Off_Correct_Rate": fcb_off_correct_rate,
+                "AC_On_Correct_Rate": ac_on_correct_rate,
+                "AC_Off_Correct_Rate": ac_off_correct_rate,
+
+                # Error direction in each state (NEW)
+                "FCB_On_High_Error_Frac": fcb_on_high_err_frac,
+                "FCB_On_Low_Error_Frac": fcb_on_low_err_frac,
+                "FCB_Off_High_Error_Frac": fcb_off_high_err_frac,
+                "FCB_Off_Low_Error_Frac": fcb_off_low_err_frac,
+                "AC_On_High_Error_Frac": ac_on_high_err_frac,
+                "AC_On_Low_Error_Frac": ac_on_low_err_frac,
+                "AC_Off_High_Error_Frac": ac_off_high_err_frac,
+                "AC_Off_Low_Error_Frac": ac_off_low_err_frac,
+
+                # Reversal indicators (NEW)
+                "FCB_Contrast_Score": fcb_contrast_score,
+                "AC_Contrast_Score": ac_contrast_score,
+                "FCB_Direction_Reversal": int(fcb_direction_reversal),
+                "AC_Direction_Reversal": int(ac_direction_reversal),
+
+                # Conditional error rates - FCB (NEW)
+                "FCB_Off_Day_Count": n_fcb_off_day,
+                "FCB_Off_Night_Count": n_fcb_off_night,
+                "FCB_Off_Day_Error_Rate": fcb_off_day_err_rate,
+                "FCB_Off_Night_Error_Rate": fcb_off_night_err_rate,
+                "FCB_Day_Night_Ratio": fcb_day_night_ratio,
+                "FCB_On_Day_Error_Rate": fcb_on_day_err_rate,
+                "FCB_On_Night_Error_Rate": fcb_on_night_err_rate,
+
+                # Conditional error rates - AC (NEW)
+                "AC_On_Day_Count": n_ac_on_day,
+                "AC_On_Night_Count": n_ac_on_night,
+                "AC_On_Day_Error_Rate": ac_on_day_err_rate,
+                "AC_On_Night_Error_Rate": ac_on_night_err_rate,
+
+                # Time-specific error analysis (NEW - Critical for complex scenarios)
+                "Day_Error_Rate": day_err_rate,
+                "Night_Error_Rate": night_err_rate,
+                "Night_Error_Fraction": night_err_fraction,
+                "Day_High_Error_Frac": day_high_err_frac,
+                "Day_Low_Error_Frac": day_low_err_frac,
+                "Night_High_Error_Frac": night_high_err_frac,
+                "Night_Low_Error_Frac": night_low_err_frac,
+                "Dominant_Error_Time": dominant_error_time,
+                "Night_High_Day_Low_Pattern": int(night_high_day_low_pattern),
+                "Day_High_Night_Low_Pattern": int(day_high_night_low_pattern),
             })
     
     print(f"✓ Extracted {len(windows)} windows from {len(sensors)} sensors")
@@ -481,31 +791,76 @@ def map_cluster_to_fault_type(profile):
     daytime_err_frac = profile['Avg_Daytime_Error_Frac']
     error_variability = profile['Avg_Error_Variability']
 
-    # Calculate correct data rates (for FCB/AC conditions)
-    fcb_on_correct = 1.0 - fcb_on_err if fcb_on_err > 0 else 1.0
-    ac_off_correct = 1.0 - ac_off_err if ac_off_err > 0 else 1.0
+    # NEW - Confounding analysis features
+    error_3hr_concentration = profile.get('Avg_Error_3Hr_Concentration', 0)
+    midday_high_err_frac = profile.get('Avg_Midday_High_Error_Fraction', 0)
+    peak_error_hour = profile.get('Avg_Peak_Error_Hour', 12)
+
+    # Conditional error rates (to separate confounded variables)
+    fcb_off_day_err = profile.get('Avg_FCB_Off_Day_Error_Rate', 0)
+    fcb_off_night_err = profile.get('Avg_FCB_Off_Night_Error_Rate', 0)
+    fcb_day_night_ratio = profile.get('Avg_FCB_Day_Night_Ratio', 1.0)
+
+    ac_on_day_err = profile.get('Avg_AC_On_Day_Error_Rate', 0)
+    ac_on_night_err = profile.get('Avg_AC_On_Night_Error_Rate', 0)
+
+    # NEW - Time-specific error analysis (Critical for user's scenario)
+    night_err_fraction = profile.get('Avg_Night_Error_Fraction', 0)
+    day_err_rate = profile.get('Avg_Day_Error_Rate', 0)
+    night_err_rate = profile.get('Avg_Night_Error_Rate', 0)
+    night_high_err_frac = profile.get('Avg_Night_High_Error_Frac', 0)
+    day_low_err_frac = profile.get('Avg_Day_Low_Error_Frac', 0)
+    night_high_day_low_pattern = profile.get('Avg_Night_High_Day_Low_Pattern', 0)
+
+    # NEW - State reversal features (CRITICAL for causation)
+    fcb_on_correct_rate = profile.get('Avg_FCB_On_Correct_Rate', 0)
+    fcb_off_correct_rate = profile.get('Avg_FCB_Off_Correct_Rate', 0)
+    ac_on_correct_rate = profile.get('Avg_AC_On_Correct_Rate', 0)
+    ac_off_correct_rate = profile.get('Avg_AC_Off_Correct_Rate', 0)
+
+    # Error direction in each state
+    fcb_off_high_err_frac = profile.get('Avg_FCB_Off_High_Error_Frac', 0)
+    ac_on_low_err_frac = profile.get('Avg_AC_On_Low_Error_Frac', 0)
+
+    # Reversal indicators
+    fcb_contrast_score = profile.get('Avg_FCB_Contrast_Score', 0)
+    ac_contrast_score = profile.get('Avg_AC_Contrast_Score', 0)
+    fcb_direction_reversal = profile.get('Avg_FCB_Direction_Reversal', 0)
+    ac_direction_reversal = profile.get('Avg_AC_Direction_Reversal', 0)
+
+    # Calculate correct data rates (for FCB/AC conditions) - DEPRECATED, use direct features
+    fcb_on_correct = fcb_on_correct_rate  # Use direct measurement
+    ac_off_correct = ac_off_correct_rate  # Use direct measurement
 
     # RULE 1: Sensör doğru okuyor (Normal)
-    # UPDATED: More realistic threshold based on actual data distribution
+    # USER INSIGHT: "Most readings should be correct" - use correct_rate, not just error_rate
+    # Check correct reading rates across ALL operational states
+    overall_correct_rate = 1.0 - error_rate
+
     # Strict: error_rate < 1% (very rare in real data)
-    # Relaxed: error_rate < 15% AND low variability AND balanced errors
     if error_rate < 0.01:
         return "Normal", 0.95
 
-    # Relaxed Normal detection: Low error rate with balanced, low-variability behavior
-    # This captures sensors that are functioning acceptably despite some occasional errors
+    # Improved Normal detection using correct reading rates
+    # Key insight: Sensor reads correctly in ALL states (not state-dependent)
     if error_rate < 0.15:  # Less than 15% error rate
         # Check for balanced errors (no strong directional bias)
         max_direction = max(high_err_frac, low_err_frac)
 
-        # If errors are balanced (neither direction dominates >70%)
-        # AND variability is low (std < 2.5°C)
-        # AND mean error is small (|mean| < 2.0°C)
-        # Then classify as "Normal"
+        # NEW: Check that sensor reads correctly across different states
+        # If correct rate is high AND consistent across FCB/AC states → Normal
+        min_correct_rate = min(fcb_on_correct_rate, fcb_off_correct_rate,
+                               ac_on_correct_rate, ac_off_correct_rate)
+
+        # Normal if: balanced errors + low variability + reads correctly in all states
         if (max_direction < 0.70 and
             error_variability < 2.5 and
-            abs(mean_error) < 2.0):
+            abs(mean_error) < 2.0 and
+            min_correct_rate > 0.80):  # Reads correctly >80% in ALL states
             confidence = 0.75 - (error_rate * 2)  # Higher confidence for lower error rates
+            # Boost confidence if very consistent across states
+            if min_correct_rate > 0.90:
+                confidence = min(0.90, confidence + 0.10)
             return "Normal", max(0.55, confidence)
 
     # RULE 4: Sürekli yüksek okuyor (Priority - check first)
@@ -530,59 +885,170 @@ def map_cluster_to_fault_type(profile):
     fault_scores = {}
 
     if check_high_cases:
-        # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE)
-        # Yüksek_Hata_Oranı between 1-80%, >80% of errors when FCB off, <20% error when FCB on
-        # CRITICAL: Only check if fcb_on_count > 20 (rule-based requirement)
         yuksek_hata_orani = high_err_frac * error_rate  # Proportion of total that are high errors
         fcb_off_err_frac = profile.get('Avg_FCB_Off_Error_Fraction', 0)
 
-        if 0.01 < yuksek_hata_orani < 0.80 and fcb_on_count > 20:  # MINIMUM COUNT CHECK
-            # Strict: >80% of errors when FCB off AND <20% error when FCB on
-            if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20 and not np.isnan(fcb_on_err):
-                score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
-                fault_scores["FCB_Off_Yuksek"] = score
-            # Moderate: >70% of errors when FCB off AND <30% error when FCB on
-            elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30 and not np.isnan(fcb_on_err):
-                score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
-                fault_scores["FCB_Off_Yuksek"] = score
-            # Relaxed: >60% of errors when FCB off AND <40% error when FCB on
-            elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40 and not np.isnan(fcb_on_err):
-                score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
-                fault_scores["FCB_Off_Yuksek"] = score
+        # ============================================================================
+        # CONFOUNDING ANALYSIS: Distinguish "FCB_Off_Yuksek" vs "Gunduz_Yuksek"
+        # ============================================================================
+        # Problem: If FCB doesn't run during daytime, "FCB off" and "daytime" are confounded
+        # Solution: Check if error pattern persists at NIGHT when FCB is also off
 
-        # RULE 6: Gündüz yüksek okuyor (ALIGNED WITH RULE-BASED CODE)
-        # Yüksek_Hata_Oranı > 1%, >80% of HIGH errors occur during daytime
+        # Evidence for TRUE "Gunduz_Yuksek" (solar radiation):
+        # 1. Errors concentrated in specific hours (11am-2pm)
+        # 2. Errors mostly in midday peak
+        # 3. FCB_Off errors ONLY during day, NOT at night (fcb_day_night_ratio >> 1)
+        #
+        # Evidence for TRUE "FCB_Off_Yuksek" (FCB malfunction):
+        # 1. Errors spread across all hours when FCB off
+        # 2. FCB_Off errors both DAY and NIGHT (fcb_day_night_ratio ≈ 1)
+        # 3. Low error hour concentration
+
+        is_solar_pattern = (
+            (error_3hr_concentration > 0.50) or  # Errors concentrated in 2-3 hours
+            (midday_high_err_frac > 0.55) or  # Peak solar hours (11am-2pm)
+            (fcb_day_night_ratio > 3.0 and fcb_off_day_err > 0.10)  # Errors only when FCB off during DAY, not night
+        )
+
+        # RULE 6: Gündüz yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + TIME-SPECIFIC CHECK)
+        # Prioritize if solar pattern detected
+        # CRITICAL FIX: Check that MOST errors occur during DAY, not NIGHT
+        # User's scenario: Night high (+6°C), day low (-6°C) should NOT be "Gunduz_Yuksek"
         if yuksek_hata_orani > 0.01:
+            # NEW: Ensure this isn't the opposite pattern (night high, day low/correct)
+            is_opposite_pattern = (night_high_day_low_pattern > 0.5)
+
+            # NEW: Check that most errors occur during DAY, not night
+            most_errors_during_day = (night_err_fraction < 0.50)  # Less than 50% errors at night = day-dominant
+
             if gunduz_yuksek_orani_yh >= 0.80:  # Of HIGH errors, 80%+ are daytime
-                score = 0.85 + (min(gunduz_yuksek_orani_yh, 0.95) - 0.80) * 0.3
-                fault_scores["Gunduz_Yuksek"] = score
+                # Only assign if errors actually occur during day AND not opposite pattern
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.85 + (min(gunduz_yuksek_orani_yh, 0.95) - 0.80) * 0.3
+                    # Boost confidence if clear solar pattern
+                    if is_solar_pattern:
+                        score = min(0.95, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
             elif gunduz_yuksek_orani_yh >= 0.70:  # Moderate
-                score = 0.70 + (gunduz_yuksek_orani_yh - 0.70) * 0.3
-                fault_scores["Gunduz_Yuksek"] = score
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.70 + (gunduz_yuksek_orani_yh - 0.70) * 0.3
+                    if is_solar_pattern:
+                        score = min(0.90, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
             elif gunduz_yuksek_orani_yh >= 0.60:  # Relaxed
-                score = 0.55 + (gunduz_yuksek_orani_yh - 0.60) * 0.3
-                fault_scores["Gunduz_Yuksek"] = score
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.55 + (gunduz_yuksek_orani_yh - 0.60) * 0.3
+                    if is_solar_pattern:
+                        score = min(0.85, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
+
+        # NEW RULE: Gece yüksek okuyor (Night high - Thermal lag/radiation effect)
+        # BOX 10 scenario: High at night, low/correct during day
+        # This is OPPOSITE of Gunduz_Yuksek
+        if yuksek_hata_orani > 0.01:
+            # Detect strong night-high pattern
+            is_night_high_pattern = (
+                (night_err_fraction > 0.60) and  # Most errors at night
+                (night_high_err_frac > 0.70) and  # Night errors are HIGH
+                (night_err_rate > day_err_rate * 1.5)  # Night error rate >> day error rate
+            )
+
+            if is_night_high_pattern:
+                # Strong pattern: >65% errors at night, >80% are high
+                if night_err_fraction >= 0.65 and night_high_err_frac >= 0.80:
+                    score = 0.85 + (min(night_err_fraction, 0.95) - 0.65) * 0.3
+                    # Boost if clear opposite pattern (day is low/correct)
+                    if night_high_day_low_pattern > 0.5:
+                        score = min(0.95, score + 0.10)
+                    fault_scores["Gece_Yuksek"] = score
+                # Moderate pattern: >60% errors at night, >70% are high
+                elif night_err_fraction >= 0.60 and night_high_err_frac >= 0.70:
+                    score = 0.70 + (night_err_fraction - 0.60) * 0.3
+                    if night_high_day_low_pattern > 0.5:
+                        score = min(0.90, score + 0.10)
+                    fault_scores["Gece_Yuksek"] = score
+
+        # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + STATE REVERSAL)
+        # Only assign if NOT clearly a solar pattern
+        if 0.01 < yuksek_hata_orani < 0.80 and fcb_on_count > 20:  # MINIMUM COUNT CHECK
+            # Check for TRUE FCB issue (not confounded with daytime)
+            is_fcb_issue = (
+                (fcb_day_night_ratio < 2.0) or  # Errors both day and night when FCB off
+                (fcb_off_night_err > 0.15 and fcb_off_day_err > 0.15)  # High errors both times
+            )
+
+            # USER INSIGHT: Check state reversal - does pattern REVERSE when FCB turns on?
+            # True FCB fault: HIGH errors when FCB off + CORRECT readings when FCB on
+            # NOT FCB fault: ALWAYS high (Surekli_Yuksek) regardless of FCB state
+            has_state_reversal = (
+                (fcb_contrast_score > 0.30) or  # Clear contrast: correct when on, error when off
+                (fcb_direction_reversal > 0.5) or  # Direction explicitly reverses
+                (fcb_on_correct_rate > 0.75 and fcb_off_err_rate > 0.30)  # Correct when on, errors when off
+            )
+
+            # Only assign FCB_Off_Yuksek if it's NOT clearly solar AND shows FCB pattern AND has reversal
+            if (not is_solar_pattern or is_fcb_issue) and has_state_reversal:
+                # Strict: >80% of errors when FCB off AND <20% error when FCB on
+                if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20 and not np.isnan(fcb_on_err):
+                    score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
+                    # Boost confidence if clear state reversal
+                    if fcb_contrast_score > 0.50:
+                        score = min(0.95, score + 0.05)
+                    # Reduce confidence if there's some solar evidence
+                    if is_solar_pattern and not is_fcb_issue:
+                        score = max(0.50, score - 0.20)
+                    fault_scores["FCB_Off_Yuksek"] = score
+                # Moderate: >70% of errors when FCB off AND <30% error when FCB on
+                elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30 and not np.isnan(fcb_on_err):
+                    score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
+                    if fcb_contrast_score > 0.40:
+                        score = min(0.90, score + 0.05)
+                    if is_solar_pattern and not is_fcb_issue:
+                        score = max(0.45, score - 0.20)
+                    fault_scores["FCB_Off_Yuksek"] = score
+                # Relaxed: >60% of errors when FCB off AND <40% error when FCB on
+                elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40 and not np.isnan(fcb_on_err):
+                    score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
+                    if is_solar_pattern and not is_fcb_issue:
+                        score = max(0.40, score - 0.15)
+                    fault_scores["FCB_Off_Yuksek"] = score
 
     if check_low_cases:
-        # RULE 3: Klima devrede iken düşük okuyor (ALIGNED WITH RULE-BASED CODE)
+        # RULE 3: Klima devrede iken düşük okuyor (ALIGNED WITH RULE-BASED CODE + STATE REVERSAL)
         # Düşük_Hata_Oranı between 1-80%, >80% of errors when AC on, <20% error when AC off
         # CRITICAL: Only check if ac_off_count > 20 (rule-based requirement)
         dusuk_hata_orani = low_err_frac * error_rate  # Proportion of total that are low errors
         ac_on_err_frac = profile.get('Avg_AC_On_Error_Fraction', 0)
 
         if 0.01 < dusuk_hata_orani < 0.80 and ac_off_count > 20:  # MINIMUM COUNT CHECK
-            # Strict: >80% of errors when AC on AND <20% error when AC off
-            if ac_on_err_frac >= 0.80 and ac_off_err < 0.20 and not np.isnan(ac_off_err):
-                score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
-                fault_scores["AC_On_Dusuk"] = score
-            # Moderate: >70% of errors when AC on AND <30% error when AC off
-            elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30 and not np.isnan(ac_off_err):
-                score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
-                fault_scores["AC_On_Dusuk"] = score
-            # Relaxed: >60% of errors when AC on AND <40% error when AC off
-            elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40 and not np.isnan(ac_off_err):
-                score = 0.60 + (ac_on_err_frac - 0.60) * 0.3
-                fault_scores["AC_On_Dusuk"] = score
+            # USER INSIGHT: Check state reversal - does pattern REVERSE when AC turns off?
+            # True AC fault: LOW errors when AC on + CORRECT/HIGH readings when AC off
+            # NOT AC fault: ALWAYS low (Surekli_Dusuk) regardless of AC state
+            has_ac_reversal = (
+                (ac_contrast_score > 0.30) or  # Clear contrast: correct when off, error when on
+                (ac_direction_reversal > 0.5) or  # Direction explicitly reverses
+                (ac_off_correct_rate > 0.75 and ac_on_err_rate > 0.30)  # Correct when off, errors when on
+            )
+
+            # Only assign AC_On_Dusuk if errors are LOW direction AND pattern reverses
+            if has_ac_reversal and ac_on_low_err_frac > 0.70:  # Errors must be LOW when AC on
+                # Strict: >80% of errors when AC on AND <20% error when AC off
+                if ac_on_err_frac >= 0.80 and ac_off_err < 0.20 and not np.isnan(ac_off_err):
+                    score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
+                    # Boost confidence if clear state reversal
+                    if ac_contrast_score > 0.50:
+                        score = min(0.95, score + 0.05)
+                    fault_scores["AC_On_Dusuk"] = score
+                # Moderate: >70% of errors when AC on AND <30% error when AC off
+                elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30 and not np.isnan(ac_off_err):
+                    score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
+                    if ac_contrast_score > 0.40:
+                        score = min(0.90, score + 0.05)
+                    fault_scores["AC_On_Dusuk"] = score
+                # Relaxed: >60% of errors when AC on AND <40% error when AC off
+                elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40 and not np.isnan(ac_off_err):
+                    score = 0.60 + (ac_on_err_frac - 0.60) * 0.3
+                    fault_scores["AC_On_Dusuk"] = score
 
     # RULE 7: Yüksek nemde hatalı okuyor
     # Error rate > 10%, >90% of errors at humidity > 90%
@@ -658,6 +1124,11 @@ def get_fault_description(fault_type):
             "tr": "Gündüz yüksek okuyor - Güneş ışığı/gölgeleme sorunu",
             "en": "High during daytime - Sunlight/shading issue",
             "icon": "☀"
+        },
+        "Gece_Yuksek": {
+            "tr": "Gece yüksek okuyor - Termal gecikme/ışınım etkisi",
+            "en": "High at night - Thermal lag/radiation effect",
+            "icon": "🌙"
         },
         "Yuksek_Nem_Hatali": {
             "tr": "Yüksek nemde hatalı - Nem >90% sapma",
@@ -737,6 +1208,38 @@ def analyze_clusters(df_clustered):
 
             # Consistency
             'Avg_Consistency_Score': cluster_data['Consistency_Score'].mean(),
+
+            # ADVANCED - Confounding analysis features
+            'Avg_Error_3Hr_Concentration': cluster_data['Error_3Hr_Concentration'].mean(),
+            'Avg_Midday_High_Error_Fraction': cluster_data['Midday_High_Error_Fraction'].mean(),
+            'Avg_Peak_Error_Hour': cluster_data['Peak_Error_Hour'].mean(),
+            'Avg_FCB_Off_Day_Error_Rate': cluster_data['FCB_Off_Day_Error_Rate'].mean(),
+            'Avg_FCB_Off_Night_Error_Rate': cluster_data['FCB_Off_Night_Error_Rate'].mean(),
+            'Avg_FCB_Day_Night_Ratio': cluster_data['FCB_Day_Night_Ratio'].mean(),
+
+            # ADVANCED - State reversal analysis (CRITICAL for causation)
+            'Avg_FCB_On_Correct_Rate': cluster_data['FCB_On_Correct_Rate'].mean(),
+            'Avg_FCB_Off_Correct_Rate': cluster_data['FCB_Off_Correct_Rate'].mean(),
+            'Avg_AC_On_Correct_Rate': cluster_data['AC_On_Correct_Rate'].mean(),
+            'Avg_AC_Off_Correct_Rate': cluster_data['AC_Off_Correct_Rate'].mean(),
+            'Avg_FCB_Off_High_Error_Frac': cluster_data['FCB_Off_High_Error_Frac'].mean(),
+            'Avg_AC_On_Low_Error_Frac': cluster_data['AC_On_Low_Error_Frac'].mean(),
+            'Avg_FCB_Contrast_Score': cluster_data['FCB_Contrast_Score'].mean(),
+            'Avg_AC_Contrast_Score': cluster_data['AC_Contrast_Score'].mean(),
+            'Avg_FCB_Direction_Reversal': cluster_data['FCB_Direction_Reversal'].mean(),
+            'Avg_AC_Direction_Reversal': cluster_data['AC_Direction_Reversal'].mean(),
+
+            # ADVANCED - Time-specific error analysis (CRITICAL for BOX 10 scenario)
+            'Avg_Day_Error_Rate': cluster_data['Day_Error_Rate'].mean(),
+            'Avg_Night_Error_Rate': cluster_data['Night_Error_Rate'].mean(),
+            'Avg_Night_Error_Fraction': cluster_data['Night_Error_Fraction'].mean(),
+            'Avg_Day_High_Error_Frac': cluster_data['Day_High_Error_Frac'].mean(),
+            'Avg_Day_Low_Error_Frac': cluster_data['Day_Low_Error_Frac'].mean(),
+            'Avg_Night_High_Error_Frac': cluster_data['Night_High_Error_Frac'].mean(),
+            'Avg_Night_Low_Error_Frac': cluster_data['Night_Low_Error_Frac'].mean(),
+            'Avg_Dominant_Error_Time': cluster_data['Dominant_Error_Time'].mean(),
+            'Avg_Night_High_Day_Low_Pattern': cluster_data['Night_High_Day_Low_Pattern'].mean(),
+            'Avg_Day_High_Night_Low_Pattern': cluster_data['Day_High_Night_Low_Pattern'].mean(),
         }
 
         # Map to fault type
@@ -767,19 +1270,42 @@ def analyze_clusters(df_clustered):
         print(f"   [DEBUG] Gunduz Yuksek (of HIGH): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
         print(f"   [DEBUG] Humidity Err Frac: {profile['Avg_High_Humidity_Error_Frac']:.2%}, Rain Err Frac: {profile['Avg_Rain_Error_Frac']:.2%}")
 
+        # NEW - Confounding analysis debug
+        print(f"   [DEBUG] Error Concentration (3hr): {profile['Avg_Error_3Hr_Concentration']:.2%}, Midday High: {profile['Avg_Midday_High_Error_Fraction']:.2%}")
+        print(f"   [DEBUG] FCB Day/Night Ratio: {profile['Avg_FCB_Day_Night_Ratio']:.2f}, FCB Off (Day): {profile['Avg_FCB_Off_Day_Error_Rate']:.2%}, FCB Off (Night): {profile['Avg_FCB_Off_Night_Error_Rate']:.2%}")
+
+        # NEW - State reversal debug
+        print(f"   [DEBUG] Correct Rates: FCB_On={profile['Avg_FCB_On_Correct_Rate']:.2%}, FCB_Off={profile['Avg_FCB_Off_Correct_Rate']:.2%}, AC_On={profile['Avg_AC_On_Correct_Rate']:.2%}, AC_Off={profile['Avg_AC_Off_Correct_Rate']:.2%}")
+        print(f"   [DEBUG] Contrast: FCB={profile['Avg_FCB_Contrast_Score']:.2f}, AC={profile['Avg_AC_Contrast_Score']:.2f}, Reversals: FCB={profile['Avg_FCB_Direction_Reversal']:.0%}, AC={profile['Avg_AC_Direction_Reversal']:.0%}")
+
         # Show key discriminating features
-        if fault_type == "Surekli_Yuksek":
+        if fault_type == "Normal":
+            min_correct = min(profile['Avg_FCB_On_Correct_Rate'], profile['Avg_FCB_Off_Correct_Rate'],
+                            profile['Avg_AC_On_Correct_Rate'], profile['Avg_AC_Off_Correct_Rate'])
+            print(f"   → Consistent correct readings: Min={min_correct:.2%} across all states")
+        elif fault_type == "Surekli_Yuksek":
             print(f"   → High Error Fraction: {profile['Avg_High_Error_Frac']:.2%}")
         elif fault_type == "Surekli_Dusuk":
             print(f"   → Low Error Fraction: {profile['Avg_Low_Error_Frac']:.2%}")
         elif fault_type == "FCB_Off_Yuksek":
             print(f"   → FCB Off Error Rate: {profile['Avg_FCB_Off_Error_Rate']:.2%}")
-            print(f"   → FCB On Error Rate: {profile['Avg_FCB_On_Error_Rate']:.2%}")
+            print(f"   → FCB On Correct Rate: {profile['Avg_FCB_On_Correct_Rate']:.2%} (should be high)")
+            print(f"   → State Reversal: Contrast={profile['Avg_FCB_Contrast_Score']:.2f} (>0.3 = clear)")
+            print(f"   → Confounding Check: Day/Night Ratio={profile['Avg_FCB_Day_Night_Ratio']:.2f} (<2.0 means TRUE FCB issue)")
         elif fault_type == "AC_On_Dusuk":
-            print(f"   → AC On Error Rate: {profile['Avg_AC_On_Error_Rate']:.2%}")
-            print(f"   → AC Off Error Rate: {profile['Avg_AC_Off_Error_Rate']:.2%}")
+            print(f"   → AC On Error Rate: {profile['Avg_AC_On_Error_Rate']:.2%} (LOW direction: {profile['Avg_AC_On_Low_Error_Frac']:.2%})")
+            print(f"   → AC Off Correct Rate: {profile['Avg_AC_Off_Correct_Rate']:.2%} (should be high)")
+            print(f"   → State Reversal: Contrast={profile['Avg_AC_Contrast_Score']:.2f} (>0.3 = clear)")
         elif fault_type == "Gunduz_Yuksek":
             print(f"   → Gunduz Yuksek Orani (of HIGH errors): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
+            print(f"   → When Errors Occur: Day={100-profile['Avg_Night_Error_Fraction']*100:.1f}%, Night={profile['Avg_Night_Error_Fraction']*100:.1f}%")
+            print(f"   → Error Direction by Time: Day High={profile['Avg_Day_High_Error_Frac']:.0%}, Night High={profile['Avg_Night_High_Error_Frac']:.0%}")
+            print(f"   → Solar Evidence: 3hr Concentration={profile['Avg_Error_3Hr_Concentration']:.2%}, Midday={profile['Avg_Midday_High_Error_Fraction']:.2%}, Peak Hour={profile['Avg_Peak_Error_Hour']:.1f}")
+        elif fault_type == "Gece_Yuksek":
+            print(f"   → When Errors Occur: Night={profile['Avg_Night_Error_Fraction']*100:.1f}%, Day={100-profile['Avg_Night_Error_Fraction']*100:.1f}%")
+            print(f"   → Error Direction by Time: Night High={profile['Avg_Night_High_Error_Frac']:.0%}, Day Low={profile['Avg_Day_Low_Error_Frac']:.0%}")
+            print(f"   → Night vs Day Error Rate: Night={profile['Avg_Night_Error_Rate']:.2%}, Day={profile['Avg_Day_Error_Rate']:.2%}")
+            print(f"   → Thermal lag/radiation effect: Errors concentrated at night, not daytime")
         elif fault_type == "Yuksek_Nem_Hatali":
             print(f"   → High Humidity Error Fraction: {profile['Avg_High_Humidity_Error_Frac']:.2%}")
         elif fault_type == "Yagisli_Hava_Hatali":
