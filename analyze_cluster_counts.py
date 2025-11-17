@@ -49,17 +49,30 @@ def analyze_cluster_count(df_features, feature_cols, n_clusters):
         cluster_data = df_features[df_features['Cluster'] == cluster_id]
         n_windows = len(cluster_data)
 
-        # Calculate cluster profile (averages)
+        # Calculate cluster profile (averages) - Include ALL columns needed for mapping
         profile = {}
+
+        # Add feature averages
         for col in feature_cols:
             avg_col_name = f'Avg_{col}'
             profile[avg_col_name] = cluster_data[col].mean()
 
-        # Add counts
+        # Add count columns that were excluded from feature_cols but are needed
         profile['Count'] = n_windows
-        profile['Avg_Error_Rate'] = cluster_data['Error_Rate'].mean()
-        profile['Avg_High_Error_Fraction'] = cluster_data['High_Error_Fraction'].mean()
-        profile['Avg_Low_Error_Fraction'] = cluster_data['Low_Error_Fraction'].mean()
+        profile['Avg_FCB_On_Count'] = cluster_data['FCB_On_Count'].mean() if 'FCB_On_Count' in cluster_data.columns else 0
+        profile['Avg_FCB_Off_Count'] = cluster_data['FCB_Off_Count'].mean() if 'FCB_Off_Count' in cluster_data.columns else 0
+        profile['Avg_AC_On_Count'] = cluster_data['AC_On_Count'].mean() if 'AC_On_Count' in cluster_data.columns else 0
+        profile['Avg_AC_Off_Count'] = cluster_data['AC_Off_Count'].mean() if 'AC_Off_Count' in cluster_data.columns else 0
+
+        # Ensure these required fields exist
+        if 'Avg_Error_Rate' not in profile:
+            profile['Avg_Error_Rate'] = cluster_data['Error_Rate'].mean() if 'Error_Rate' in cluster_data.columns else 0
+        if 'Avg_High_Error_Fraction' not in profile:
+            profile['Avg_High_Error_Fraction'] = cluster_data['High_Error_Fraction'].mean() if 'High_Error_Fraction' in cluster_data.columns else 0
+        if 'Avg_Low_Error_Fraction' not in profile:
+            profile['Avg_Low_Error_Fraction'] = cluster_data['Low_Error_Fraction'].mean() if 'Low_Error_Fraction' in cluster_data.columns else 0
+        if 'Avg_Mean_Signed_Error' not in profile:
+            profile['Avg_Mean_Signed_Error'] = cluster_data['Mean_Signed_Error'].mean() if 'Mean_Signed_Error' in cluster_data.columns else 0
 
         # Map to fault type
         fault_type, confidence = map_cluster_to_fault_type(profile)
