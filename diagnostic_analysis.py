@@ -20,6 +20,10 @@ print("\n📊 Loading data...")
 df = pd.read_csv("clean_joined_dataset.csv", encoding='utf-8-sig')
 print(f"Total records: {len(df):,}")
 
+# Calculate error columns (same as main script)
+df["Signed_Error"] = df["Actual_Diff"] - df["Expected_Diff"]
+df["Abs_Error"] = df["Signed_Error"].abs()
+
 # Filter extreme outliers (same as main script)
 extreme_outlier_mask = (df["Abs_Error"] > 100) | (df["Sensor_Temperature"].abs() > 100)
 n_extreme = extreme_outlier_mask.sum()
