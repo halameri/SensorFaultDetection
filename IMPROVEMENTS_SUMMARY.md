@@ -6,7 +6,7 @@ This document summarizes the professional-grade data science improvements made t
 
 ---
 
-## 📊 Three Major Improvements
+## 📊 Four Major Improvements
 
 ### 1. **Relaxed Normal Detection + Pattern Coverage Analysis**
 **Commit:** `e971f4d`
@@ -117,12 +117,76 @@ Evidence: AC_Off_Correct_Rate=0%, AC_Contrast_Score=-0.5 (no reversal)
 
 ---
 
+### 4. **Time-Specific Error Analysis**
+**Commit:** `27dc98b`
+
+#### Problem Solved:
+- BOX 10 sensor classified as "Gunduz_Yuksek" (high during daytime) when errors occurred at NIGHT
+- Most errors: Night (0-6am) +4.7 to +6.5°C HIGH, Day (12-5pm) -5.4 to -6.2°C LOW
+- Current logic only checked "of HIGH errors, % during daytime" but didn't check WHEN errors occur
+- Opposite pattern (night high, day low) was misclassified as "Gunduz_Yuksek"
+
+#### Solution - 10 New Features:
+
+**A. Error Timing:**
+- `Day_Error_Rate`: Error rate during daytime (6am-6pm)
+- `Night_Error_Rate`: Error rate during nighttime (6pm-6am)
+- `Night_Error_Fraction`: % of ALL errors that occur at night (KEY metric)
+- `Dominant_Error_Time`: 0=mixed, 1=day-dominant, 2=night-dominant
+
+**B. Error Direction by Time:**
+- `Day_High_Error_Frac`: Of daytime errors, % that are HIGH
+- `Day_Low_Error_Frac`: Of daytime errors, % that are LOW
+- `Night_High_Error_Frac`: Of nighttime errors, % that are HIGH
+- `Night_Low_Error_Frac`: Of nighttime errors, % that are LOW
+
+**C. Pattern Detection:**
+- `Night_High_Day_Low_Pattern`: Boolean - opposite of Gunduz_Yuksek
+- `Day_High_Night_Low_Pattern`: Boolean - expected Gunduz_Yuksek pattern
+
+**D. Improved Logic:**
+
+1. **Gunduz_Yuksek Detection:**
+   - OLD: Only checked if HIGH errors occur during daytime
+   - NEW: ALSO checks that most errors occur during DAY (night_err_fraction < 0.50)
+   - NEW: Rejects if opposite pattern detected (night high, day low)
+
+2. **Enhanced Debug Output:**
+   - Shows when errors occur: "Day=XX%, Night=XX%"
+   - Shows error direction by time: "Day High=XX%, Night High=XX%"
+   - Helps users understand temporal patterns
+
+#### Example Fixed:
+```
+Scenario: BOX 10 - Night high (+6°C), Day low (-6°C)
+Before: "Gunduz_Yuksek" (WRONG - errors at night, not day)
+After: "Gece_Yuksek" (CORRECT - new fault type!)
+Evidence: Night_Err_Fraction=75%, Night_High_Err_Frac=95%, Day_Low_Err_Frac=80%
+Reason: Thermal lag/radiation effect - opposite of solar pattern
+```
+
+**E. New Fault Type Added:**
+
+Based on the BOX 10 scenario, a new fault type was created:
+
+- **Gece_Yuksek** (Night High - 🌙)
+  - Turkish: "Gece yüksek okuyor - Termal gecikme/ışınım etkisi"
+  - English: "High at night - Thermal lag/radiation effect"
+  - Detection: night_err_fraction > 60%, night_high_err_frac > 70%, night_err_rate >> day_err_rate
+  - Possible causes:
+    - Building thermal mass (heat retained at night)
+    - Sky radiation cooling effects
+    - Sensor placement near heat-retaining surfaces
+    - Opposite of solar heating pattern
+
+---
+
 ## 📈 Total Improvements
 
 ### Feature Engineering:
 - **Original features**: ~35
-- **New features added**: 57 (17 confounding + 20 state reversal + 20 aggregations)
-- **Total features now**: ~92
+- **New features added**: 67 (17 confounding + 20 state reversal + 10 time-specific + 20 aggregations)
+- **Total features now**: ~102
 
 ### Code Changes:
 - **Lines added**: ~440 lines
@@ -132,10 +196,24 @@ Evidence: AC_Off_Correct_Rate=0%, AC_Contrast_Score=-0.5 (no reversal)
 
 ### Classification Improvements:
 1. ✅ Normal detection: More accurate (requires consistency across states)
-2. ✅ Gunduz_Yuksek: Distinguishes from FCB confounding
-3. ✅ FCB_Off_Yuksek: Requires state reversal evidence
-4. ✅ AC_On_Dusuk: Requires state reversal + direction check
-5. ✅ Pattern explanation: Users understand missing patterns
+2. ✅ Gunduz_Yuksek: Distinguishes from FCB confounding + time-specific checks
+3. ✅ Gece_Yuksek: NEW fault type for night-high patterns (BOX 10 scenario)
+4. ✅ FCB_Off_Yuksek: Requires state reversal evidence
+5. ✅ AC_On_Dusuk: Requires state reversal + direction check
+6. ✅ Pattern explanation: Users understand missing patterns
+
+### Fault Types Supported:
+- **Total fault types**: 10 (was 9)
+  1. Normal (✓)
+  2. Sürekli_Yüksek (⬆)
+  3. Sürekli_Düşük (⬇)
+  4. FCB_Off_Yüksek (🔧)
+  5. AC_On_Düşük (❄)
+  6. Gündüz_Yüksek (☀)
+  7. **Gece_Yüksek (🌙) - NEW!**
+  8. Yüksek_Nem_Hatalı (💧)
+  9. Yağışlı_Hava_Hatalı (🌧)
+  10. Düzensiz_Rastgele (⚡)
 
 ---
 
@@ -198,20 +276,44 @@ Expected output (if pattern exists):
 
 ---
 
-#### 4. Pattern Coverage:
+#### 4. Gece_Yuksek Detection (NEW):
+```
+Expected output (if pattern exists):
+🌙 Gece_Yuksek
+   → When Errors Occur: Night=XX.X%, Day=XX.X%
+   → Error Direction by Time: Night High=XX%, Day Low=XX%
+   → Night vs Day Error Rate: Night=XX.X%, Day=XX.X%
+   → Thermal lag/radiation effect: Errors concentrated at night, not daytime
+```
+**Check:**
+- Night_Error_Fraction should be >60% (most errors at night)
+- Night_High_Error_Frac should be >70% (night errors are HIGH direction)
+- Night_Error_Rate should be >> Day_Error_Rate (much worse at night)
+- This is OPPOSITE of Gunduz_Yuksek (which is high during day)
+
+**Physical Interpretation:**
+- Building thermal mass retaining heat at night
+- Sky radiation cooling effects
+- Sensor near heat-retaining surfaces (concrete, asphalt)
+- Opposite of solar heating pattern
+
+---
+
+#### 5. Pattern Coverage:
 ```
 Expected output:
 ================================================================================
 PATTERN DETECTION ANALYSIS
 ================================================================================
 
-✅ DETECTED PATTERNS (X/9):
+✅ DETECTED PATTERNS (X/10):
    ✓ Normal                 XX,XXX windows ( XX.X%)
    ✓ Gunduz_Yuksek         XX,XXX windows ( XX.X%)
+   ✓ Gece_Yuksek           XX,XXX windows ( XX.X%)  [NEW!]
    ✓ FCB_Off_Yuksek        XX,XXX windows ( XX.X%)
    ...
 
-❌ MISSING PATTERNS (X/9):
+❌ MISSING PATTERNS (X/10):
    ✗ AC_On_Dusuk           → No strong AC-related low error pattern found
    ✗ Yuksek_Nem_Hatali     → Humidity errors don't dominate any cluster
    ...
@@ -259,14 +361,16 @@ Missing: Normal, AC_On_Dusuk, others
 ```
 Expected Fault_Description_TR:
 - Normal                            ~15-25%  (NEW - relaxed threshold)
-- Gündüz yüksek okuyor              ~25-45%  (CORRECTED - solar only)
+- Gündüz yüksek okuyor              ~20-35%  (CORRECTED - solar only, day-specific)
+- Gece yüksek okuyor                 ~2-8%   (NEW - night-high thermal lag)
 - FCB devrede değilken yüksek        ~5-10%  (CORRECTED - true FCB only)
 - Düzensiz (rastgele) hatalı        ~20-30%
 - Sürekli düşük okuyor               ~1-3%
+- Sürekli yüksek okuyor              ~1-3%
 - AC_On_Dusuk                        ~0-5%   (if pattern exists + reversal)
-- Others                             ~0-2%   (if environmental patterns exist)
+- Others (Humidity/Rain)             ~0-2%   (if environmental patterns exist)
 
-Better distribution + clearer causation evidence
+Better distribution + clearer causation + NEW night pattern detection
 ```
 
 ---
