@@ -37,7 +37,7 @@ class Config:
     """Configuration parameters"""
     
     # Files
-    INPUT_FILE = "clean_joined_dataset.csv"
+    INPUT_FILE = r"D:\TT\YZ2025\FCBOX\FinalCodes\Finalcodes28102025\FCboxSensorHataTespiti\ML2\claude\files\clean_joined_dataset - Copy.csv"
     OUTPUT_FILE = "ml_15day_windows_clustered.csv"
     
     # Window parameters
@@ -968,87 +968,62 @@ def map_cluster_to_fault_type(profile):
                         score = min(0.90, score + 0.10)
                     fault_scores["Gece_Yuksek"] = score
 
-        # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + STATE REVERSAL)
-        # Only assign if NOT clearly a solar pattern
+        # RULE 2: FCB devrede değilken yüksek okuyor
+        # ORIGINAL USER RULE: Yüksek Hata oranı >%1 AND <%80,
+        #                     hataların %80'den fazlası FCB devrede değilken,
+        #                     FCB devrede iken %80'den fazla doğru data
+        # ENHANCEMENT: Check for solar confounding (Gunduz vs FCB) but don't require extra reversal metrics
         if 0.01 < yuksek_hata_orani < 0.80 and fcb_on_count > 20:  # MINIMUM COUNT CHECK
-            # Check for TRUE FCB issue (not confounded with daytime)
+            # Check for TRUE FCB issue (not confounded with daytime/solar)
             is_fcb_issue = (
                 (fcb_day_night_ratio < 2.0) or  # Errors both day and night when FCB off
                 (fcb_off_night_err > 0.15 and fcb_off_day_err > 0.15)  # High errors both times
             )
 
-            # USER INSIGHT: Check state reversal - does pattern REVERSE when FCB turns on?
-            # True FCB fault: HIGH errors when FCB off + CORRECT readings when FCB on
-            # NOT FCB fault: ALWAYS high (Surekli_Yuksek) regardless of FCB state
-            has_state_reversal = (
-                (fcb_contrast_score > 0.30) or  # Clear contrast: correct when on, error when off
-                (fcb_direction_reversal > 0.5) or  # Direction explicitly reverses
-                (fcb_on_correct_rate > 0.75 and fcb_off_err_rate > 0.30)  # Correct when on, errors when off
-            )
-
-            # Only assign FCB_Off_Yuksek if it's NOT clearly solar AND shows FCB pattern AND has reversal
-            if (not is_solar_pattern or is_fcb_issue) and has_state_reversal:
-                # Strict: >80% of errors when FCB off AND <20% error when FCB on
+            # Only assign FCB_Off_Yuksek if it's NOT clearly solar OR is clearly FCB issue
+            if not is_solar_pattern or is_fcb_issue:
+                # ORIGINAL RULE: >80% of errors when FCB off AND <20% error when FCB on (= >80% correct when on)
                 if fcb_off_err_frac >= 0.80 and fcb_on_err < 0.20 and not np.isnan(fcb_on_err):
                     score = 0.90 + (min(fcb_off_err_frac, 0.95) - 0.80) * 0.2
-                    # Boost confidence if clear state reversal
-                    if fcb_contrast_score > 0.50:
-                        score = min(0.95, score + 0.05)
-                    # Reduce confidence if there's some solar evidence
+                    # Reduce confidence slightly if there's solar evidence but still FCB issue
+                    if is_solar_pattern and not is_fcb_issue:
+                        score = max(0.60, score - 0.20)
+                    fault_scores["FCB_Off_Yuksek"] = score
+                # RELAXED: >70% of errors when FCB off AND <30% error when FCB on (= >70% correct when on)
+                elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30 and not np.isnan(fcb_on_err):
+                    score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
                     if is_solar_pattern and not is_fcb_issue:
                         score = max(0.50, score - 0.20)
                     fault_scores["FCB_Off_Yuksek"] = score
-                # Moderate: >70% of errors when FCB off AND <30% error when FCB on
-                elif fcb_off_err_frac >= 0.70 and fcb_on_err < 0.30 and not np.isnan(fcb_on_err):
-                    score = 0.75 + (fcb_off_err_frac - 0.70) * 0.3
-                    if fcb_contrast_score > 0.40:
-                        score = min(0.90, score + 0.05)
-                    if is_solar_pattern and not is_fcb_issue:
-                        score = max(0.45, score - 0.20)
-                    fault_scores["FCB_Off_Yuksek"] = score
-                # Relaxed: >60% of errors when FCB off AND <40% error when FCB on
+                # MORE RELAXED: >60% of errors when FCB off AND <40% error when FCB on (= >60% correct when on)
                 elif fcb_off_err_frac >= 0.60 and fcb_on_err < 0.40 and not np.isnan(fcb_on_err):
-                    score = 0.60 + (fcb_off_err_frac - 0.60) * 0.3
+                    score = 0.65 + (fcb_off_err_frac - 0.60) * 0.2
                     if is_solar_pattern and not is_fcb_issue:
-                        score = max(0.40, score - 0.15)
+                        score = max(0.45, score - 0.15)
                     fault_scores["FCB_Off_Yuksek"] = score
 
     if check_low_cases:
-        # RULE 3: Klima devrede iken düşük okuyor (ALIGNED WITH RULE-BASED CODE + STATE REVERSAL)
-        # Düşük_Hata_Oranı between 1-80%, >80% of errors when AC on, <20% error when AC off
+        # RULE 3: Klima devrede iken düşük okuyor
+        # ORIGINAL USER RULE: Düşük Hata oranı >%1 AND <%80,
+        #                     hataların %80'den fazlası klimanın devrede olduğu anda,
+        #                     klima devrede değilken %80'den fazla doğru data
         # CRITICAL: Only check if ac_off_count > 20 (rule-based requirement)
         dusuk_hata_orani = low_err_frac * error_rate  # Proportion of total that are low errors
         ac_on_err_frac = profile.get('Avg_AC_On_Error_Fraction', 0)
 
         if 0.01 < dusuk_hata_orani < 0.80 and ac_off_count > 20:  # MINIMUM COUNT CHECK
-            # USER INSIGHT: Check state reversal - does pattern REVERSE when AC turns off?
-            # True AC fault: LOW errors when AC on + CORRECT/HIGH readings when AC off
-            # NOT AC fault: ALWAYS low (Surekli_Dusuk) regardless of AC state
-            has_ac_reversal = (
-                (ac_contrast_score > 0.30) or  # Clear contrast: correct when off, error when on
-                (ac_direction_reversal > 0.5) or  # Direction explicitly reverses
-                (ac_off_correct_rate > 0.75 and ac_on_err_rate > 0.30)  # Correct when off, errors when on
-            )
-
-            # Only assign AC_On_Dusuk if errors are LOW direction AND pattern reverses
-            if has_ac_reversal and ac_on_low_err_frac > 0.70:  # Errors must be LOW when AC on
-                # Strict: >80% of errors when AC on AND <20% error when AC off
-                if ac_on_err_frac >= 0.80 and ac_off_err < 0.20 and not np.isnan(ac_off_err):
-                    score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
-                    # Boost confidence if clear state reversal
-                    if ac_contrast_score > 0.50:
-                        score = min(0.95, score + 0.05)
-                    fault_scores["AC_On_Dusuk"] = score
-                # Moderate: >70% of errors when AC on AND <30% error when AC off
-                elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30 and not np.isnan(ac_off_err):
-                    score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
-                    if ac_contrast_score > 0.40:
-                        score = min(0.90, score + 0.05)
-                    fault_scores["AC_On_Dusuk"] = score
-                # Relaxed: >60% of errors when AC on AND <40% error when AC off
-                elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40 and not np.isnan(ac_off_err):
-                    score = 0.60 + (ac_on_err_frac - 0.60) * 0.3
-                    fault_scores["AC_On_Dusuk"] = score
+            # ORIGINAL RULE: >80% of errors when AC on AND <20% error when AC off (= >80% correct when off)
+            if ac_on_err_frac >= 0.80 and ac_off_err < 0.20 and not np.isnan(ac_off_err):
+                score = 0.90 + (min(ac_on_err_frac, 0.95) - 0.80) * 0.2
+                fault_scores["AC_On_Dusuk"] = score
+            # RELAXED: >70% of errors when AC on AND <30% error when AC off (= >70% correct when off)
+            elif ac_on_err_frac >= 0.70 and ac_off_err < 0.30 and not np.isnan(ac_off_err):
+                score = 0.75 + (ac_on_err_frac - 0.70) * 0.3
+                fault_scores["AC_On_Dusuk"] = score
+            # MORE RELAXED: >60% of errors when AC on AND <40% error when AC off (= >60% correct when off)
+            elif ac_on_err_frac >= 0.60 and ac_off_err < 0.40 and not np.isnan(ac_off_err):
+                score = 0.65 + (ac_on_err_frac - 0.60) * 0.2
+                fault_scores["AC_On_Dusuk"] = score
 
     # RULE 7: Yüksek nemde hatalı okuyor
     # Error rate > 10%, >90% of errors at humidity > 90%
