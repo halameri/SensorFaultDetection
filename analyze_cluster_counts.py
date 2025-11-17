@@ -17,12 +17,13 @@ warnings.filterwarnings('ignore')
 import sys
 sys.path.insert(0, '/home/user/SensorFaultDetection')
 from clustering_approach_sensor_faults import (
-    load_data,
-    create_windows,
     extract_window_features,
     map_cluster_to_fault_type,
     get_fault_description
 )
+
+class Config:
+    INPUT_FILE = 'clean_joined_dataset.csv'
 
 def analyze_cluster_count(df_features, feature_cols, n_clusters):
     """
@@ -227,27 +228,13 @@ def main():
     print("CLUSTER COUNT ANALYSIS - K=4 to K=12")
     print("="*80)
 
-    # Load data
-    print("\n1. Loading data...")
-    df = load_data('clean_joined_dataset.csv')
-    print(f"   Loaded {len(df):,} readings")
+    # Load data and extract features
+    print("\n1. Loading data and extracting features...")
+    df_raw = pd.read_csv(Config.INPUT_FILE)
+    print(f"   Loaded {len(df_raw):,} readings")
 
-    # Create windows
-    print("\n2. Creating 15-day windows...")
-    windows = create_windows(df)
-    print(f"   Created {len(windows):,} windows")
-
-    # Extract features
-    print("\n3. Extracting features for all windows...")
-    all_window_features = []
-    for i, (sensor_code, window_start, window_end, window_data) in enumerate(windows):
-        if (i + 1) % 500 == 0:
-            print(f"   Processed {i+1:,}/{len(windows):,} windows...")
-        features = extract_window_features(sensor_code, window_start, window_end, window_data)
-        if features is not None:
-            all_window_features.append(features)
-
-    df_features = pd.DataFrame(all_window_features)
+    print("\n2. Extracting window features...")
+    df_features = extract_window_features(df_raw)
     print(f"   ✓ Extracted features for {len(df_features):,} windows")
 
     # Select feature columns
@@ -261,7 +248,7 @@ def main():
     print(f"   Using {len(feature_cols)} features for clustering")
 
     # Analyze different cluster counts
-    print("\n4. Analyzing cluster counts K=4 to K=12...")
+    print("\n3. Analyzing cluster counts K=4 to K=12...")
     all_results = {}
 
     for k in range(4, 13):  # 4 to 12 inclusive
@@ -270,7 +257,7 @@ def main():
         all_results[k] = fault_dist
 
     # Create visualizations
-    print("\n5. Creating visualizations...")
+    print("\n4. Creating visualizations...")
     visualize_cluster_analysis(all_results)
 
     # Print summary

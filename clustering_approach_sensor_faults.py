@@ -1452,6 +1452,7 @@ def main():
         "FCB_Off_Yuksek": "FCB devrede değilken yüksek - FCB devreye girmiyor",
         "AC_On_Dusuk": "Klima devredeyken düşük - Klima etkisi",
         "Gunduz_Yuksek": "Gündüz yüksek okuyor - Güneş ışığı/gölgeleme sorunu",
+        "Gece_Yuksek": "Gece yüksek okuyor - Termal gecikme/ışınım etkisi",
         "Yuksek_Nem_Hatali": "Yüksek nemde hatalı - Nem sensörü etkileşimi",
         "Yagisli_Hava_Hatali": "Yağışlı havada hatalı - Yağış etkisi",
         "Duzensiz_Rastgele": "Düzensiz (rastgele) hatalı - Gürültü/kablo/haberleşme"
@@ -1460,14 +1461,14 @@ def main():
     detected_faults = set(df_clustered['Fault_Type'].unique())
     missing_faults = set(all_fault_types.keys()) - detected_faults
 
-    print(f"\n✅ DETECTED PATTERNS ({len(detected_faults)}/9):")
+    print(f"\n✅ DETECTED PATTERNS ({len(detected_faults)}/10):")
     for fault in sorted(detected_faults):
         count = (df_clustered['Fault_Type'] == fault).sum()
         pct = count / len(df_clustered) * 100
         print(f"   ✓ {fault:25} {count:6,} windows ({pct:5.1f}%) - {all_fault_types[fault]}")
 
     if missing_faults:
-        print(f"\n❌ MISSING PATTERNS ({len(missing_faults)}/9):")
+        print(f"\n❌ MISSING PATTERNS ({len(missing_faults)}/10):")
         print("   These patterns were not detected in your data. This is normal if:")
         print("   - The sensors don't exhibit this specific fault behavior")
         print("   - The environmental conditions (humidity, rain) are not extreme enough")
