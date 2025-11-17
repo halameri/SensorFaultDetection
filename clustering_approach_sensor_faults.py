@@ -328,7 +328,84 @@ def extract_window_features(df):
                 daytime_err_frac = (err_mask & daytime_mask).sum() / err_count
             else:
                 daytime_err_frac = 0.0
-            
+
+            # ================================================================
+            # TIME-SPECIFIC ERROR ANALYSIS (NEW - Critical for user's scenario)
+            # ================================================================
+            # User's insight: Need to check WHEN errors occur and WHAT DIRECTION
+            # Example: Errors at NIGHT (high) vs DAYTIME (low) - NOT "Gunduz_Yuksek"!
+
+            nighttime_mask = ~daytime_mask  # Nighttime = 18:00 - 06:00
+
+            # 1. ERROR RATES BY TIME OF DAY
+            n_daytime = daytime_mask.sum()
+            n_nighttime = nighttime_mask.sum()
+
+            # How many readings have errors during day vs night?
+            day_err_count = (err_mask & daytime_mask).sum()
+            night_err_count = (err_mask & nighttime_mask).sum()
+
+            # Error rate during day vs night
+            day_err_rate = day_err_count / n_daytime if n_daytime > 0 else 0
+            night_err_rate = night_err_count / n_nighttime if n_nighttime > 0 else 0
+
+            # Of ALL errors, what % occur during night vs day?
+            if err_count > 0:
+                night_err_fraction = night_err_count / err_count  # Key metric!
+                # If > 0.60, most errors are at NIGHT, NOT day
+            else:
+                night_err_fraction = 0.0
+
+            # 2. ERROR DIRECTION BY TIME OF DAY
+            # Day: HIGH or LOW?
+            day_high_err_count = (high_err & daytime_mask).sum()
+            day_low_err_count = (low_err & daytime_mask).sum()
+
+            if day_err_count > 0:
+                day_high_err_frac = day_high_err_count / day_err_count
+                day_low_err_frac = day_low_err_count / day_err_count
+            else:
+                day_high_err_frac = 0.0
+                day_low_err_frac = 0.0
+
+            # Night: HIGH or LOW?
+            night_high_err_count = (high_err & nighttime_mask).sum()
+            night_low_err_count = (low_err & nighttime_mask).sum()
+
+            if night_err_count > 0:
+                night_high_err_frac = night_high_err_count / night_err_count
+                night_low_err_frac = night_low_err_count / night_err_count
+            else:
+                night_high_err_frac = 0.0
+                night_low_err_frac = 0.0
+
+            # 3. DOMINANT ERROR TIME (Key for user's scenario)
+            # Where do MOST errors occur?
+            if err_count > 5:  # Need enough errors to determine pattern
+                if night_err_fraction > 0.65:
+                    dominant_error_time = 2  # Night-dominant
+                elif night_err_fraction < 0.35:
+                    dominant_error_time = 1  # Day-dominant
+                else:
+                    dominant_error_time = 0  # Mixed/balanced
+            else:
+                dominant_error_time = 0
+
+            # 4. TIME-DIRECTION PATTERN CHECK
+            # Check for user's scenario: High at night, low/correct at day
+            night_high_day_low_pattern = (
+                (night_err_fraction > 0.60) and  # Most errors at night
+                (night_high_err_frac > 0.70) and  # Night errors are HIGH
+                (day_low_err_frac > 0.50 or day_err_rate < night_err_rate * 0.5)  # Day is LOW or much better
+            )
+
+            # Opposite pattern: High during day, low/correct at night
+            day_high_night_low_pattern = (
+                (night_err_fraction < 0.40) and  # Most errors during day
+                (day_high_err_frac > 0.70) and  # Day errors are HIGH
+                (night_err_rate < day_err_rate * 0.5)  # Night is much better
+            )
+
             # Variability metrics (NEW - useful for clustering)
             error_variability = win["Abs_Error"].std()
             error_range = win["Abs_Error"].max() - win["Abs_Error"].min()
@@ -545,6 +622,18 @@ def extract_window_features(df):
                 "AC_On_Night_Count": n_ac_on_night,
                 "AC_On_Day_Error_Rate": ac_on_day_err_rate,
                 "AC_On_Night_Error_Rate": ac_on_night_err_rate,
+
+                # Time-specific error analysis (NEW - Critical for complex scenarios)
+                "Day_Error_Rate": day_err_rate,
+                "Night_Error_Rate": night_err_rate,
+                "Night_Error_Fraction": night_err_fraction,
+                "Day_High_Error_Frac": day_high_err_frac,
+                "Day_Low_Error_Frac": day_low_err_frac,
+                "Night_High_Error_Frac": night_high_err_frac,
+                "Night_Low_Error_Frac": night_low_err_frac,
+                "Dominant_Error_Time": dominant_error_time,
+                "Night_High_Day_Low_Pattern": int(night_high_day_low_pattern),
+                "Day_High_Night_Low_Pattern": int(day_high_night_low_pattern),
             })
     
     print(f"✓ Extracted {len(windows)} windows from {len(sensors)} sensors")
@@ -715,6 +804,14 @@ def map_cluster_to_fault_type(profile):
     ac_on_day_err = profile.get('Avg_AC_On_Day_Error_Rate', 0)
     ac_on_night_err = profile.get('Avg_AC_On_Night_Error_Rate', 0)
 
+    # NEW - Time-specific error analysis (Critical for user's scenario)
+    night_err_fraction = profile.get('Avg_Night_Error_Fraction', 0)
+    day_err_rate = profile.get('Avg_Day_Error_Rate', 0)
+    night_err_rate = profile.get('Avg_Night_Error_Rate', 0)
+    night_high_err_frac = profile.get('Avg_Night_High_Error_Frac', 0)
+    day_low_err_frac = profile.get('Avg_Day_Low_Error_Frac', 0)
+    night_high_day_low_pattern = profile.get('Avg_Night_High_Day_Low_Pattern', 0)
+
     # NEW - State reversal features (CRITICAL for causation)
     fcb_on_correct_rate = profile.get('Avg_FCB_On_Correct_Rate', 0)
     fcb_off_correct_rate = profile.get('Avg_FCB_Off_Correct_Rate', 0)
@@ -813,25 +910,37 @@ def map_cluster_to_fault_type(profile):
             (fcb_day_night_ratio > 3.0 and fcb_off_day_err > 0.10)  # Errors only when FCB off during DAY, not night
         )
 
-        # RULE 6: Gündüz yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK)
+        # RULE 6: Gündüz yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + TIME-SPECIFIC CHECK)
         # Prioritize if solar pattern detected
+        # CRITICAL FIX: Check that MOST errors occur during DAY, not NIGHT
+        # User's scenario: Night high (+6°C), day low (-6°C) should NOT be "Gunduz_Yuksek"
         if yuksek_hata_orani > 0.01:
+            # NEW: Ensure this isn't the opposite pattern (night high, day low/correct)
+            is_opposite_pattern = (night_high_day_low_pattern > 0.5)
+
+            # NEW: Check that most errors occur during DAY, not night
+            most_errors_during_day = (night_err_fraction < 0.50)  # Less than 50% errors at night = day-dominant
+
             if gunduz_yuksek_orani_yh >= 0.80:  # Of HIGH errors, 80%+ are daytime
-                score = 0.85 + (min(gunduz_yuksek_orani_yh, 0.95) - 0.80) * 0.3
-                # Boost confidence if clear solar pattern
-                if is_solar_pattern:
-                    score = min(0.95, score + 0.10)
-                fault_scores["Gunduz_Yuksek"] = score
+                # Only assign if errors actually occur during day AND not opposite pattern
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.85 + (min(gunduz_yuksek_orani_yh, 0.95) - 0.80) * 0.3
+                    # Boost confidence if clear solar pattern
+                    if is_solar_pattern:
+                        score = min(0.95, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
             elif gunduz_yuksek_orani_yh >= 0.70:  # Moderate
-                score = 0.70 + (gunduz_yuksek_orani_yh - 0.70) * 0.3
-                if is_solar_pattern:
-                    score = min(0.90, score + 0.10)
-                fault_scores["Gunduz_Yuksek"] = score
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.70 + (gunduz_yuksek_orani_yh - 0.70) * 0.3
+                    if is_solar_pattern:
+                        score = min(0.90, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
             elif gunduz_yuksek_orani_yh >= 0.60:  # Relaxed
-                score = 0.55 + (gunduz_yuksek_orani_yh - 0.60) * 0.3
-                if is_solar_pattern:
-                    score = min(0.85, score + 0.10)
-                fault_scores["Gunduz_Yuksek"] = score
+                if most_errors_during_day and not is_opposite_pattern:
+                    score = 0.55 + (gunduz_yuksek_orani_yh - 0.60) * 0.3
+                    if is_solar_pattern:
+                        score = min(0.85, score + 0.10)
+                    fault_scores["Gunduz_Yuksek"] = score
 
         # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + STATE REVERSAL)
         # Only assign if NOT clearly a solar pattern
@@ -1088,6 +1197,18 @@ def analyze_clusters(df_clustered):
             'Avg_AC_Contrast_Score': cluster_data['AC_Contrast_Score'].mean(),
             'Avg_FCB_Direction_Reversal': cluster_data['FCB_Direction_Reversal'].mean(),
             'Avg_AC_Direction_Reversal': cluster_data['AC_Direction_Reversal'].mean(),
+
+            # ADVANCED - Time-specific error analysis (CRITICAL for BOX 10 scenario)
+            'Avg_Day_Error_Rate': cluster_data['Day_Error_Rate'].mean(),
+            'Avg_Night_Error_Rate': cluster_data['Night_Error_Rate'].mean(),
+            'Avg_Night_Error_Fraction': cluster_data['Night_Error_Fraction'].mean(),
+            'Avg_Day_High_Error_Frac': cluster_data['Day_High_Error_Frac'].mean(),
+            'Avg_Day_Low_Error_Frac': cluster_data['Day_Low_Error_Frac'].mean(),
+            'Avg_Night_High_Error_Frac': cluster_data['Night_High_Error_Frac'].mean(),
+            'Avg_Night_Low_Error_Frac': cluster_data['Night_Low_Error_Frac'].mean(),
+            'Avg_Dominant_Error_Time': cluster_data['Dominant_Error_Time'].mean(),
+            'Avg_Night_High_Day_Low_Pattern': cluster_data['Night_High_Day_Low_Pattern'].mean(),
+            'Avg_Day_High_Night_Low_Pattern': cluster_data['Day_High_Night_Low_Pattern'].mean(),
         }
 
         # Map to fault type
@@ -1146,6 +1267,8 @@ def analyze_clusters(df_clustered):
             print(f"   → State Reversal: Contrast={profile['Avg_AC_Contrast_Score']:.2f} (>0.3 = clear)")
         elif fault_type == "Gunduz_Yuksek":
             print(f"   → Gunduz Yuksek Orani (of HIGH errors): {profile['Avg_Gunduz_Yuksek_Orani_YH']:.2%}")
+            print(f"   → When Errors Occur: Day={100-profile['Avg_Night_Error_Fraction']*100:.1f}%, Night={profile['Avg_Night_Error_Fraction']*100:.1f}%")
+            print(f"   → Error Direction by Time: Day High={profile['Avg_Day_High_Error_Frac']:.0%}, Night High={profile['Avg_Night_High_Error_Frac']:.0%}")
             print(f"   → Solar Evidence: 3hr Concentration={profile['Avg_Error_3Hr_Concentration']:.2%}, Midday={profile['Avg_Midday_High_Error_Fraction']:.2%}, Peak Hour={profile['Avg_Peak_Error_Hour']:.1f}")
         elif fault_type == "Yuksek_Nem_Hatali":
             print(f"   → High Humidity Error Fraction: {profile['Avg_High_Humidity_Error_Frac']:.2%}")
