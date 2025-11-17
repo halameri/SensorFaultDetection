@@ -942,6 +942,32 @@ def map_cluster_to_fault_type(profile):
                         score = min(0.85, score + 0.10)
                     fault_scores["Gunduz_Yuksek"] = score
 
+        # NEW RULE: Gece yüksek okuyor (Night high - Thermal lag/radiation effect)
+        # BOX 10 scenario: High at night, low/correct during day
+        # This is OPPOSITE of Gunduz_Yuksek
+        if yuksek_hata_orani > 0.01:
+            # Detect strong night-high pattern
+            is_night_high_pattern = (
+                (night_err_fraction > 0.60) and  # Most errors at night
+                (night_high_err_frac > 0.70) and  # Night errors are HIGH
+                (night_err_rate > day_err_rate * 1.5)  # Night error rate >> day error rate
+            )
+
+            if is_night_high_pattern:
+                # Strong pattern: >65% errors at night, >80% are high
+                if night_err_fraction >= 0.65 and night_high_err_frac >= 0.80:
+                    score = 0.85 + (min(night_err_fraction, 0.95) - 0.65) * 0.3
+                    # Boost if clear opposite pattern (day is low/correct)
+                    if night_high_day_low_pattern > 0.5:
+                        score = min(0.95, score + 0.10)
+                    fault_scores["Gece_Yuksek"] = score
+                # Moderate pattern: >60% errors at night, >70% are high
+                elif night_err_fraction >= 0.60 and night_high_err_frac >= 0.70:
+                    score = 0.70 + (night_err_fraction - 0.60) * 0.3
+                    if night_high_day_low_pattern > 0.5:
+                        score = min(0.90, score + 0.10)
+                    fault_scores["Gece_Yuksek"] = score
+
         # RULE 2: FCB devrede değilken yüksek okuyor (ALIGNED WITH RULE-BASED CODE + CONFOUNDING CHECK + STATE REVERSAL)
         # Only assign if NOT clearly a solar pattern
         if 0.01 < yuksek_hata_orani < 0.80 and fcb_on_count > 20:  # MINIMUM COUNT CHECK
@@ -1098,6 +1124,11 @@ def get_fault_description(fault_type):
             "tr": "Gündüz yüksek okuyor - Güneş ışığı/gölgeleme sorunu",
             "en": "High during daytime - Sunlight/shading issue",
             "icon": "☀"
+        },
+        "Gece_Yuksek": {
+            "tr": "Gece yüksek okuyor - Termal gecikme/ışınım etkisi",
+            "en": "High at night - Thermal lag/radiation effect",
+            "icon": "🌙"
         },
         "Yuksek_Nem_Hatali": {
             "tr": "Yüksek nemde hatalı - Nem >90% sapma",
@@ -1270,6 +1301,11 @@ def analyze_clusters(df_clustered):
             print(f"   → When Errors Occur: Day={100-profile['Avg_Night_Error_Fraction']*100:.1f}%, Night={profile['Avg_Night_Error_Fraction']*100:.1f}%")
             print(f"   → Error Direction by Time: Day High={profile['Avg_Day_High_Error_Frac']:.0%}, Night High={profile['Avg_Night_High_Error_Frac']:.0%}")
             print(f"   → Solar Evidence: 3hr Concentration={profile['Avg_Error_3Hr_Concentration']:.2%}, Midday={profile['Avg_Midday_High_Error_Fraction']:.2%}, Peak Hour={profile['Avg_Peak_Error_Hour']:.1f}")
+        elif fault_type == "Gece_Yuksek":
+            print(f"   → When Errors Occur: Night={profile['Avg_Night_Error_Fraction']*100:.1f}%, Day={100-profile['Avg_Night_Error_Fraction']*100:.1f}%")
+            print(f"   → Error Direction by Time: Night High={profile['Avg_Night_High_Error_Frac']:.0%}, Day Low={profile['Avg_Day_Low_Error_Frac']:.0%}")
+            print(f"   → Night vs Day Error Rate: Night={profile['Avg_Night_Error_Rate']:.2%}, Day={profile['Avg_Day_Error_Rate']:.2%}")
+            print(f"   → Thermal lag/radiation effect: Errors concentrated at night, not daytime")
         elif fault_type == "Yuksek_Nem_Hatali":
             print(f"   → High Humidity Error Fraction: {profile['Avg_High_Humidity_Error_Frac']:.2%}")
         elif fault_type == "Yagisli_Hava_Hatali":
