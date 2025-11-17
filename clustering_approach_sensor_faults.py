@@ -366,7 +366,7 @@ def extract_window_features(df):
                         # Find best 3-hour consecutive window
                         max_3hr_count = 0
                         for h in range(24):
-                            count_3hr = sum(hour_counts.get(h, 0) + hour_counts.get((h+1)%24, 0) + hour_counts.get((h+2)%24, 0))
+                            count_3hr = hour_counts.get(h, 0) + hour_counts.get((h+1)%24, 0) + hour_counts.get((h+2)%24, 0)
                             max_3hr_count = max(max_3hr_count, count_3hr)
                         error_3hr_concentration = max_3hr_count / len(error_hours)
                     else:
