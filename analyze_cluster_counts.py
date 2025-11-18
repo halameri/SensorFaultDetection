@@ -22,8 +22,40 @@ from clustering_approach_sensor_faults import (
     get_fault_description
 )
 
+# ============================================================================
+# CONFIGURATION - EASY TO MODIFY
+# ============================================================================
+
 class Config:
+    # Input/Output Files
     INPUT_FILE = 'clean_joined_dataset.csv'
+    OUTPUT_CHART = 'cluster_count_analysis.png'
+    OUTPUT_TABLE = 'cluster_count_table.png'
+
+    # Cluster Range to Analyze
+    K_MIN = 4                    # Minimum number of clusters
+    K_MAX = 12                   # Maximum number of clusters
+
+    # Clustering Parameters
+    RANDOM_STATE = 42            # For reproducibility
+    N_INIT = 20                  # Number of K-Means initializations
+
+    # Visualization Settings
+    FIGURE_SIZE_CHARTS = (20, 12)    # Size of 4-chart figure
+    FIGURE_SIZE_TABLE = (16, 10)     # Size of table figure
+    DPI = 300                        # Output image resolution
+
+    # Chart Colors
+    HEADER_COLOR = '#4472C4'         # Table header color
+    TOTAL_ROW_COLOR = '#E7E6E6'      # Table total row color
+    FAULT_COL_COLOR = '#D9E1F2'      # Table fault type column color
+
+    # Display Settings
+    TOP_N_FAULT_TYPES = 5            # Number of top fault types to show in line plot
+
+# ============================================================================
+# END CONFIGURATION
+# ============================================================================
 
 def analyze_cluster_count(df_features, feature_cols, n_clusters):
     """
@@ -39,7 +71,7 @@ def analyze_cluster_count(df_features, feature_cols, n_clusters):
     X_scaled = scaler.fit_transform(X)
 
     # Cluster
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=Config.RANDOM_STATE, n_init=Config.N_INIT)
     df_features['Cluster'] = kmeans.fit_predict(X_scaled)
 
     # Analyze each cluster
@@ -108,7 +140,7 @@ def visualize_cluster_analysis(all_results):
     data_pct = (data_matrix / totals) * 100
 
     # Create figure with multiple subplots
-    fig = plt.figure(figsize=(20, 12))
+    fig = plt.figure(figsize=Config.FIGURE_SIZE_CHARTS)
 
     # 1. Stacked Area Chart
     ax1 = plt.subplot(2, 2, 1)
@@ -145,9 +177,9 @@ def visualize_cluster_analysis(all_results):
 
     # 3. Line plot for major fault types
     ax3 = plt.subplot(2, 2, 3)
-    # Plot top 5 most common fault types
+    # Plot top N most common fault types
     fault_totals = data_matrix.sum(axis=1)
-    top_indices = np.argsort(fault_totals)[-5:][::-1]
+    top_indices = np.argsort(fault_totals)[-Config.TOP_N_FAULT_TYPES:][::-1]
 
     for idx in top_indices:
         fault_type = all_fault_types[idx]
@@ -156,7 +188,7 @@ def visualize_cluster_analysis(all_results):
 
     ax3.set_xlabel('Number of Clusters (K)', fontweight='bold', fontsize=12)
     ax3.set_ylabel('Percentage (%)', fontweight='bold', fontsize=12)
-    ax3.set_title('Top 5 Fault Types Trend', fontweight='bold', fontsize=14)
+    ax3.set_title(f'Top {Config.TOP_N_FAULT_TYPES} Fault Types Trend', fontweight='bold', fontsize=14)
     ax3.legend(fontsize=10)
     ax3.grid(alpha=0.3)
     ax3.set_xticks(k_values)
@@ -180,11 +212,11 @@ def visualize_cluster_analysis(all_results):
     ax4.grid(alpha=0.3, axis='y')
 
     plt.tight_layout()
-    plt.savefig('cluster_count_analysis.png', dpi=300, bbox_inches='tight')
-    print(f"\n✓ Saved visualization: cluster_count_analysis.png")
+    plt.savefig(Config.OUTPUT_CHART, dpi=Config.DPI, bbox_inches='tight')
+    print(f"\n✓ Saved visualization: {Config.OUTPUT_CHART}")
 
     # Create detailed comparison table
-    fig2, ax = plt.subplots(figsize=(16, 10))
+    fig2, ax = plt.subplots(figsize=Config.FIGURE_SIZE_TABLE)
     ax.axis('tight')
     ax.axis('off')
 
@@ -215,30 +247,30 @@ def visualize_cluster_analysis(all_results):
 
     # Style header
     for i in range(len(header)):
-        table[(0, i)].set_facecolor('#4472C4')
+        table[(0, i)].set_facecolor(Config.HEADER_COLOR)
         table[(0, i)].set_text_props(weight='bold', color='white')
 
     # Style total row
     for i in range(len(total_row)):
-        table[(len(table_data)-1, i)].set_facecolor('#E7E6E6')
+        table[(len(table_data)-1, i)].set_facecolor(Config.TOTAL_ROW_COLOR)
         table[(len(table_data)-1, i)].set_text_props(weight='bold')
 
     # Style fault type column
     for i in range(1, len(table_data)-1):
-        table[(i, 0)].set_facecolor('#D9E1F2')
+        table[(i, 0)].set_facecolor(Config.FAULT_COL_COLOR)
         table[(i, 0)].set_text_props(weight='bold')
 
     plt.title('Detailed Cluster Count Comparison Table\n(Count and Percentage)',
              fontweight='bold', fontsize=16, pad=20)
-    plt.savefig('cluster_count_table.png', dpi=300, bbox_inches='tight')
-    print(f"✓ Saved table: cluster_count_table.png")
+    plt.savefig(Config.OUTPUT_TABLE, dpi=Config.DPI, bbox_inches='tight')
+    print(f"✓ Saved table: {Config.OUTPUT_TABLE}")
 
 def main():
     """
     Main analysis function
     """
     print("="*80)
-    print("CLUSTER COUNT ANALYSIS - K=4 to K=12")
+    print(f"CLUSTER COUNT ANALYSIS - K={Config.K_MIN} to K={Config.K_MAX}")
     print("="*80)
 
     # Load data and extract features
@@ -261,10 +293,10 @@ def main():
     print(f"   Using {len(feature_cols)} features for clustering")
 
     # Analyze different cluster counts
-    print("\n3. Analyzing cluster counts K=4 to K=12...")
+    print(f"\n3. Analyzing cluster counts K={Config.K_MIN} to K={Config.K_MAX}...")
     all_results = {}
 
-    for k in range(4, 13):  # 4 to 12 inclusive
+    for k in range(Config.K_MIN, Config.K_MAX + 1):  # K_MIN to K_MAX inclusive
         df_copy = df_features.copy()
         fault_dist = analyze_cluster_count(df_copy, feature_cols, k)
         all_results[k] = fault_dist
@@ -277,14 +309,14 @@ def main():
     print("\n" + "="*80)
     print("SUMMARY - Fault Type Coverage by K")
     print("="*80)
-    for k in range(4, 13):
+    for k in range(Config.K_MIN, Config.K_MAX + 1):
         n_fault_types = len(all_results[k])
         print(f"K={k:2d}: {n_fault_types} different fault types detected")
 
     print("\n✓ Analysis complete!")
     print("\nGenerated files:")
-    print("  - cluster_count_analysis.png  (4 charts showing trends)")
-    print("  - cluster_count_table.png     (detailed comparison table)")
+    print(f"  - {Config.OUTPUT_CHART}  (4 charts showing trends)")
+    print(f"  - {Config.OUTPUT_TABLE}     (detailed comparison table)")
 
 if __name__ == "__main__":
     main()
